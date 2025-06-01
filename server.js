@@ -4,18 +4,34 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
+// Garante que a pasta uploads existe
+if (!fs.existsSync('uploads')) {
+  fs.mkdirSync('uploads');
+}
+
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 
+// Health check
+app.get('/', (req, res) => {
+  res.send('WhatsApp Decrypt API online!');
+});
+
+// Endpoint de descriptografia
 app.post('/decrypt', upload.single('file'), (req, res) => {
   try {
-    const mediaKeyBase64 = req.body.mediaKey;
-    if (!mediaKeyBase64) {
+    if (!req.body.mediaKey) {
       return res.status(400).json({ error: 'mediaKey is required' });
     }
+    if (!req.file) {
+      return res.status(400).json({ error: 'file is required' });
+    }
+
+    const mediaKeyBase64 = req.body.mediaKey;
     const mediaKey = Buffer.from(mediaKeyBase64, 'base64');
     const encryptedData = fs.readFileSync(req.file.path);
 
+    // HKDF
     const info = Buffer.from('WhatsApp Document Keys');
     const salt = Buffer.alloc(0);
 
@@ -52,8 +68,9 @@ app.post('/decrypt', upload.single('file'), (req, res) => {
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('WhatsApp Decrypt API online!');
+// Fallback para rotas não encontradas
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
 });
 
 const PORT = process.env.PORT || 3000;
