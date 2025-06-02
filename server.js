@@ -44,23 +44,55 @@ app.get('/health', (req, res) => {
 // Rota para descriptografar arquivo via upload
 app.post('/decrypt', upload.single('file'), async (req, res) => {
     try {
+        console.log('📥 Recebendo requisição /decrypt');
+        console.log('📋 Headers:', JSON.stringify(req.headers, null, 2));
+        console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+        console.log('📁 File info:', req.file ? {
+            fieldname: req.file.fieldname,
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size
+        } : 'Nenhum arquivo');
+        
         const { mediaKey, mediaType = 'document', outputName } = req.body;
         
         if (!req.file) {
             return res.status(400).json({
-                error: 'Nenhum arquivo foi enviado'
+                error: 'Nenhum arquivo foi enviado',
+                debug: {
+                    hasFile: !!req.file,
+                    body: req.body,
+                    files: req.files
+                }
             });
         }
         
         if (!mediaKey) {
             return res.status(400).json({
-                error: 'mediaKey é obrigatória'
+                error: 'mediaKey é obrigatória',
+                debug: {
+                    mediaKey: {
+                        presente: !!mediaKey,
+                        tipo: typeof mediaKey,
+                        valor: mediaKey
+                    },
+                    bodyCompleto: req.body
+                }
             });
         }
 
-        console.log(`📥 Recebendo arquivo: ${req.file.originalname} (${req.file.size} bytes)`);
+        console.log(`📥 Arquivo recebido: ${req.file.originalname} (${req.file.size} bytes)`);
         console.log(`🔑 MediaKey: ${mediaKey.substring(0, 20)}...`);
         console.log(`📄 Tipo de mídia: ${mediaType}`);
+
+        // Ativar debug no decrypter
+        decrypter.setDebug(true);
+        
+        // Debug do buffer recebido
+        console.log('🔍 Debug do arquivo:');
+        console.log(`   Tamanho: ${req.file.buffer.length} bytes`);
+        console.log(`   Primeiros 32 bytes: ${req.file.buffer.slice(0, 32).toString('hex')}`);
+        console.log(`   Últimos 32 bytes: ${req.file.buffer.slice(-32).toString('hex')}`);
 
         // Descriptografa o arquivo
         const decryptedBuffer = decrypter.decryptBuffer(req.file.buffer, mediaKey, mediaType);
@@ -96,11 +128,40 @@ app.post('/decrypt', upload.single('file'), async (req, res) => {
 // Rota para descriptografar dados em base64
 app.post('/decrypt/buffer', async (req, res) => {
     try {
+        console.log('📥 Recebendo requisição /decrypt/buffer');
+        console.log('📋 Headers:', JSON.stringify(req.headers, null, 2));
+        console.log('📦 Body keys:', Object.keys(req.body));
+        console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+        
         const { encryptedData, mediaKey, mediaType = 'document', returnBase64 = false } = req.body;
         
+        // Debug mais detalhado
+        console.log('🔍 Validação dos dados:');
+        console.log(`   encryptedData presente: ${!!encryptedData}`);
+        console.log(`   encryptedData tipo: ${typeof encryptedData}`);
+        console.log(`   encryptedData tamanho: ${encryptedData ? encryptedData.length : 'N/A'}`);
+        console.log(`   mediaKey presente: ${!!mediaKey}`);
+        console.log(`   mediaKey tipo: ${typeof mediaKey}`);
+        console.log(`   mediaKey tamanho: ${mediaKey ? mediaKey.length : 'N/A'}`);
+        
         if (!encryptedData || !mediaKey) {
+            const errorDetail = {
+                encryptedData: {
+                    presente: !!encryptedData,
+                    tipo: typeof encryptedData,
+                    tamanho: encryptedData ? encryptedData.length : null
+                },
+                mediaKey: {
+                    presente: !!mediaKey,
+                    tipo: typeof mediaKey,
+                    tamanho: mediaKey ? mediaKey.length : null
+                },
+                bodyCompleto: req.body
+            };
+            
             return res.status(400).json({
-                error: 'encryptedData e mediaKey são obrigatórios'
+                error: 'encryptedData e mediaKey são obrigatórios',
+                debug: errorDetail
             });
         }
 
