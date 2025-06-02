@@ -1,7 +1,6 @@
 const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
-const path = require('path');
 const cors = require('cors');
 const { decryptMedia } = require('./decrypt');
 
@@ -9,10 +8,6 @@ const app = express();
 app.use(cors());
 
 const upload = multer({ dest: 'uploads/' });
-
-app.get('/', (req, res) => {
-  res.send('WhatsApp Decrypt API online!');
-});
 
 app.post('/decrypt', upload.single('file'), async (req, res) => {
   try {
@@ -23,15 +18,14 @@ app.post('/decrypt', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'file is required' });
     }
 
+    // Lê o arquivo binário corretamente
     const encryptedData = fs.readFileSync(req.file.path);
 
+    // Descriptografa
     const decrypted = decryptMedia(encryptedData, req.body.mediaKey, 'document');
 
-    // Define nome do arquivo de saída
-    const originalName = req.file.originalname || 'decrypted.pdf';
-    const fileName = originalName.endsWith('.enc') ? originalName.slice(0, -4) : `decrypted-${originalName}`;
-
-    // Detecta o tipo de arquivo para o header correto
+    // Define nome e tipo do arquivo de saída
+    let fileName = req.file.originalname.replace('.enc', '') || 'decrypted.pdf';
     let contentType = 'application/pdf';
     if (fileName.endsWith('.docx')) {
       contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -43,7 +37,6 @@ app.post('/decrypt', upload.single('file'), async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   } finally {
-    // Limpa arquivo temporário
     if (req.file && req.file.path) {
       fs.unlink(req.file.path, () => {});
     }
