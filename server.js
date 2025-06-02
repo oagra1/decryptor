@@ -148,3 +148,73 @@ app.post('/whatsapp-flow-endpoint', upload.none(), async (req, res) => {
 app.listen(PORT, () => {
   console.log(`WhatsApp Flow Endpoint rodando na porta ${PORT}`);
 });
+
+// --- Leitura segura da chave privada RSA ---
+const privateKeyPath = process.env.PRIVATE_KEY_PATH || './private.pem';
+const PASSPHRASE = process.env.PASSPHRASE || null;
+
+let PRIVATE_KEY_PEM;
+try {
+  PRIVATE_KEY_PEM = fs.readFileSync(privateKeyPath, 'utf-8');
+  if (DEBUG_LOGS) console.log(`Chave privada RSA carregada de: ${privateKeyPath}`);
+} catch (err) {
+  console.error(`ERRO ao ler a chave privada RSA no caminho ${privateKeyPath}:`, err.message);
+  process.exit(1);
+}
+
+// --- Funções de descriptografia e criptografia (mantém as que já te enviei) ---
+
+// decryptAESKey, decryptPayload, encryptResponse ...
+
+// --- Endpoint principal ---
+app.post('/whatsapp-flow-endpoint', upload.none(), async (req, res) => {
+  try {
+    const { encrypted_flow_data, encrypted_aes_key, initial_vector } = req.body;
+
+    if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
+      if (DEBUG_LOGS) console.warn('Requisição com parâmetros faltando:', req.body);
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    // 1. Decrypt AES key
+    const aesKey = decryptAESKey(encrypted_aes_key);
+
+    // 2. Decrypt payload
+    const decryptedData = decryptPayload(encrypted_flow_data, aesKey, initial_vector);
+
+    if (DEBUG_LOGS) console.log('Payload descriptografado:', decryptedData);
+
+    // 3. Sua lógica de negócio aqui
+    const responsePayload = {
+      screen: 'SCREEN_NAME',
+      data: {
+        message: 'Resposta segura do seu backend',
+        receivedData: decryptedData,
+      },
+    };
+
+    // 4. Encripta resposta
+    const encryptedResponse = encryptResponse(responsePayload, aesKey, Buffer.from(initial_vector, 'base64'));
+
+    // 5. Envia resposta para WhatsApp
+    res.send(encryptedResponse);
+
+  } catch (error) {
+    console.error('Erro no endpoint WhatsApp Flow:', error);
+
+    // Se erro de descriptografia, responde HTTP 421 para WhatsApp tentar novamente
+    if (
+      error.message.includes('bad decrypt') ||
+      error.message.includes('Unsupported state or unable to authenticate data')
+    ) {
+      return res.status(421).send('Decryption failed');
+    }
+
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- Inicializa servidor ---
+app.listen(PORT, () => {
+  console.log(`WhatsApp Flow Endpoint rodando na porta ${PORT}`);
+});
