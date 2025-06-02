@@ -251,6 +251,117 @@ app.post('/decrypt/file', async (req, res) => {
     }
 });
 
+// ENDPOINT DE TESTE DEFINITIVO
+app.post('/test/brute-force', async (req, res) => {
+    try {
+        console.log('🔥 TESTE FORÇA BRUTA');
+        
+        const { mediaKey, fileData } = req.body;
+        
+        if (!mediaKey || !fileData) {
+            return res.status(400).json({
+                error: 'Preciso de mediaKey e fileData'
+            });
+        }
+        
+        const encryptedBuffer = Buffer.from(fileData, 'base64');
+        console.log(`📦 Buffer: ${encryptedBuffer.length} bytes`);
+        console.log(`🔑 MediaKey: ${mediaKey}`);
+        
+        const results = [];
+        const types = ['document', 'image', 'video', 'audio'];
+        
+        // Testar cada tipo de mídia
+        for (const type of types) {
+            try {
+                console.log(`🧪 Testando tipo: ${type}`);
+                decrypter.setDebug(false); // Desligar debug para não poluir
+                const result = decrypter.decryptBuffer(encryptedBuffer, mediaKey, type);
+                
+                const magicBytes = result.slice(0, 16).toString('hex');
+                const detectedType = decrypter.detectFileType(result);
+                
+                // Salvar o sucesso
+                const fileName = `success_${type}_${Date.now()}.${detectedType}`;
+                fs.writeFileSync(fileName, result);
+                
+                results.push({
+                    mediaType: type,
+                    success: true,
+                    size: result.length,
+                    magicBytes: magicBytes,
+                    detectedType: detectedType,
+                    fileName: fileName
+                });
+                
+                console.log(`✅ SUCESSO com ${type}! Arquivo: ${fileName}`);
+                
+            } catch (error) {
+                results.push({
+                    mediaType: type,
+                    success: false,
+                    error: error.message
+                });
+                console.log(`❌ Falhou com ${type}: ${error.message}`);
+            }
+        }
+        
+        // Tentar com variações da MediaKey
+        const keyVariations = [
+            mediaKey,
+            mediaKey.replace(/\+/g, '-').replace(/\//g, '_'), // URL safe
+            mediaKey.replace(/=+$/, ''), // Sem padding
+            mediaKey + '=', // Com padding extra
+        ];
+        
+        for (const key of keyVariations) {
+            if (key === mediaKey) continue; // Já testou
+            
+            try {
+                console.log(`🔑 Testando variação da chave: ${key.substring(0, 20)}...`);
+                const result = decrypter.decryptBuffer(encryptedBuffer, key, 'document');
+                
+                const fileName = `key_variation_${Date.now()}.pdf`;
+                fs.writeFileSync(fileName, result);
+                
+                results.push({
+                    mediaType: 'document',
+                    keyVariation: key,
+                    success: true,
+                    size: result.length,
+                    fileName: fileName
+                });
+                
+                console.log(`✅ SUCESSO com variação da chave! Arquivo: ${fileName}`);
+                
+            } catch (error) {
+                // Ignorar erros de variação
+            }
+        }
+        
+        const anySuccess = results.some(r => r.success);
+        
+        res.json({
+            success: anySuccess,
+            message: anySuccess ? 'Pelo menos uma tentativa funcionou!' : 'Nenhuma tentativa funcionou',
+            totalTests: results.length,
+            results: results,
+            analysis: {
+                bufferSize: encryptedBuffer.length,
+                mediaKeyLength: mediaKey.length,
+                firstBytes: encryptedBuffer.slice(0, 32).toString('hex'),
+                lastBytes: encryptedBuffer.slice(-32).toString('hex')
+            }
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            error: error.message,
+            stack: error.stack
+        });
+    }
+});
+
 // Rota SUPER SIMPLES - JSON com mediaKey e fileData
 app.post('/simple/json', async (req, res) => {
     try {
