@@ -18,6 +18,12 @@ class N8NWhatsAppDecrypter {
             console.log(JSON.stringify(webhookData, null, 2));
             console.log('📋 CHAVES DISPONÍVEIS:', Object.keys(webhookData));
             
+            // Verificar se tem mediaKey diretamente
+            if (webhookData.mediaKey && webhookData.fileData) {
+                console.log('🎯 Detectado dados diretos com mediaKey e fileData');
+                return await this.processDirectData(webhookData);
+            }
+            
             // Se vier direto do N8N com arquivo baixado
             if (webhookData.binary && webhookData.json) {
                 console.log('🎯 Detectado formato N8N com binary data');
@@ -71,6 +77,65 @@ class N8NWhatsAppDecrypter {
             
         } catch (error) {
             console.error('❌ Erro no processamento:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Processa dados diretos (mediaKey + fileData)
+     */
+    async processDirectData(data) {
+        try {
+            console.log('🔄 Processando dados diretos');
+            
+            const mediaKey = data.mediaKey;
+            const fileName = data.fileName || 'document.pdf';
+            const mimetype = data.mimetype || 'application/pdf';
+            const fileData = data.fileData;
+            
+            console.log(`📋 Dados diretos:
+   📄 Arquivo: ${fileName}
+   🔑 MediaKey: ${mediaKey.substring(0, 20)}...
+   📁 Tipo: ${mimetype}
+   📦 FileData tipo: ${typeof fileData}`);
+            
+            // Converter fileData para buffer
+            let encryptedBuffer;
+            if (typeof fileData === 'string') {
+                encryptedBuffer = Buffer.from(fileData, 'base64');
+            } else if (Buffer.isBuffer(fileData)) {
+                encryptedBuffer = fileData;
+            } else if (fileData.data) {
+                encryptedBuffer = Buffer.from(fileData.data, fileData.encoding || 'base64');
+            } else {
+                throw new Error('Formato de fileData não reconhecido');
+            }
+            
+            console.log(`   📏 Tamanho buffer: ${encryptedBuffer.length} bytes`);
+            
+            // Descriptografar
+            console.log('\n🔓 Descriptografando arquivo...');
+            const decryptedBuffer = await this.decryptFile(encryptedBuffer, mediaKey, mimetype);
+            
+            // Salvar arquivo
+            const outputFileName = `decrypted_${Date.now()}_${fileName}`;
+            fs.writeFileSync(outputFileName, decryptedBuffer);
+            
+            console.log(`✅ Arquivo descriptografado: ${outputFileName}`);
+            
+            return {
+                success: true,
+                originalFileName: fileName,
+                decryptedFileName: outputFileName,
+                originalSize: encryptedBuffer.length,
+                decryptedSize: decryptedBuffer.length,
+                mimetype: mimetype,
+                filePath: outputFileName,
+                buffer: decryptedBuffer
+            };
+            
+        } catch (error) {
+            console.error('❌ Erro no processamento direto:', error.message);
             throw error;
         }
     }
