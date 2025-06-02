@@ -251,6 +251,44 @@ app.post('/decrypt/file', async (req, res) => {
     }
 });
 
+// Rota SUPER SIMPLES - JSON com mediaKey e fileData
+app.post('/simple/json', async (req, res) => {
+    try {
+        const { mediaKey, fileData } = req.body;
+        
+        console.log('🎯 ROTA JSON SIMPLES');
+        console.log(`🔑 MediaKey: ${mediaKey ? 'OK' : 'FALTOU'}`);
+        console.log(`📦 FileData: ${fileData ? 'OK' : 'FALTOU'}`);
+        
+        if (!mediaKey || !fileData) {
+            return res.status(400).json({
+                error: 'Preciso de mediaKey e fileData'
+            });
+        }
+        
+        // Converter e descriptografar
+        const encryptedBuffer = Buffer.from(fileData, 'base64');
+        decrypter.setDebug(true);
+        const decryptedBuffer = decrypter.decryptBuffer(encryptedBuffer, mediaKey, 'document');
+        
+        console.log(`✅ FUNCIONOU: ${decryptedBuffer.length} bytes`);
+        
+        // Retornar JSON com arquivo
+        res.json({
+            success: true,
+            size: decryptedBuffer.length,
+            fileBase64: decryptedBuffer.toString('base64')
+        });
+        
+    } catch (error) {
+        console.error('❌ ERRO JSON:', error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 // Rota SIMPLES E DIRETA - FAZ O QUE VOCÊ QUER
 app.post('/simple/decrypt', upload.single('file'), async (req, res) => {
     try {
