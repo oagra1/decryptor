@@ -1,220 +1,213 @@
-require('dotenv').config();
-
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
 const fs = require('fs');
-const cors = require('cors');
-const crypto = require('crypto');
+const WhatsAppDecrypter = require('./decrypt');
 
 const app = express();
+const port = process.env.PORT || 3000;
 
-// Configurações do .env
-const PORT = process.env.PORT || 3000;
-const DEBUG_LOGS = process.env.DEBUG_LOGS === 'true';
-const ENABLE_CORS = process.env.ENABLE_CORS === 'true';
-const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE, 10) || 10 * 1024 * 1024;
-
-if (ENABLE_CORS) {
-  // Configura CORS com origem definida no .env ou permite todas
-  const allowedOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['*'];
-  app.use(cors({
-    origin: function(origin, callback) {
-      if (!origin || allowedOrigins.indexOf('*') !== -1 || allowedOrigins.indexOf(origin) !== -1) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
+// Configuração do multer para upload de arquivos
+const storage = multer.memoryStorage();
+const upload = multer({ 
+    storage: storage,
+    limits: {
+        fileSize: 100 * 1024 * 1024 // 100MB max
     }
-  }));
-}
-
-// Middleware para JSON
-app.use(express.json({ limit: MAX_FILE_SIZE }));
-
-// Configuração Multer para upload em memória com limite de tamanho
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_SIZE }
 });
 
-// Leitura segura da chave privada RSA
-const privateKeyPath = process.env.PRIVATE_KEY_PATH;
-if (!privateKeyPath) {
-  console.error('ERRO: Variável PRIVATE_KEY_PATH não definida no .env');
-  process.exit(1);
-}
+// Middleware
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-let PRIVATE_KEY_PEM;
-try {
-  PRIVATE_KEY_PEM = fs.readFileSync(privateKeyPath, 'utf-8');
-  if (DEBUG_LOGS) console.log('Chave privada RSA carregada com sucesso.');
-} catch (err) {
-  console.error('ERRO ao ler a chave privada RSA:', err.message);
-  process.exit(1);
-}
+// Instância do decrypter
+const decrypter = new WhatsAppDecrypter();
 
-const PASSPHRASE = process.env.PASSPHRASE || null;
-
-// Função para descriptografar a chave AES com RSA OAEP SHA256
-function decryptAESKey(encryptedAesKeyB64) {
-  const encryptedAesKey = Buffer.from(encryptedAesKeyB64, 'base64');
-  const privateKey = crypto.createPrivateKey({
-    key: PRIVATE_KEY_PEM,
-    format: 'pem',
-    passphrase: PASSPHRASE,
-  });
-  return privateKey.decrypt(encryptedAesKey, crypto.constants.RSA_PKCS1_OAEP_PADDING);
-}
-
-// Função para descriptografar payload AES-GCM
-function decryptPayload(encryptedFlowDataB64, aesKey, ivB64) {
-  const encryptedFlowData = Buffer.from(encryptedFlowDataB64, 'base64');
-  const iv = Buffer.from(ivB64, 'base64');
-
-  // Últimos 16 bytes são tag de autenticação
-  const authTag = encryptedFlowData.slice(encryptedFlowData.length - 16);
-  const encrypted = encryptedFlowData.slice(0, encryptedFlowData.length - 16);
-
-  const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, iv);
-  decipher.setAuthTag(authTag);
-
-  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-  return JSON.parse(decrypted.toString('utf-8'));
-}
-
-// Função para criptografar resposta AES-GCM com IV invertido
-function encryptResponse(responseObj, aesKey, iv) {
-  // Inverte o IV (XOR 0xFF)
-  const flippedIv = Buffer.from(iv.map(b => b ^ 0xFF));
-
-  const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, flippedIv);
-  const encrypted = Buffer.concat([cipher.update(JSON.stringify(responseObj), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-
-  // Concatena dados criptografados + tag
-  const encryptedWithTag = Buffer.concat([encrypted, tag]);
-  return encryptedWithTag.toString('base64');
-}
-
-// Endpoint principal
-app.post('/whatsapp-flow-endpoint', upload.none(), async (req, res) => {
-  try {
-    const { encrypted_flow_data, encrypted_aes_key, initial_vector } = req.body;
-
-    if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
-      if (DEBUG_LOGS) console.warn('Requisição com parâmetros faltando:', req.body);
-      return res.status(400).json({ error: 'Missing required parameters' });
-    }
-
-    // 1. Decrypt AES key
-    const aesKey = decryptAESKey(encrypted_aes_key);
-
-    // 2. Decrypt payload
-    const decryptedData = decryptPayload(encrypted_flow_data, aesKey, initial_vector);
-
-    if (DEBUG_LOGS) console.log('Payload descriptografado:', decryptedData);
-
-    // 3. Sua lógica de negócio aqui
-    const responsePayload = {
-      screen: 'SCREEN_NAME',
-      data: {
-        message: 'Resposta segura do seu backend',
-        receivedData: decryptedData,
-      },
-    };
-
-    // 4. Encripta resposta
-    const encryptedResponse = encryptResponse(responsePayload, aesKey, Buffer.from(initial_vector, 'base64'));
-
-    // 5. Envia resposta para WhatsApp
-    res.send(encryptedResponse);
-
-  } catch (error) {
-    console.error('Erro no endpoint WhatsApp Flow:', error);
-
-    // Se erro de descriptografia, responde HTTP 421 para WhatsApp tentar novamente
-    if (
-      error.message.includes('bad decrypt') ||
-      error.message.includes('Unsupported state or unable to authenticate data')
-    ) {
-      return res.status(421).send('Decryption failed');
-    }
-
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+// Rota principal
+app.get('/', (req, res) => {
+    res.json({
+        message: 'WhatsApp Media Decrypter API',
+        version: '1.0.0',
+        endpoints: {
+            'POST /decrypt': 'Descriptografa um arquivo do WhatsApp',
+            'POST /decrypt/buffer': 'Descriptografa dados em buffer',
+            'GET /health': 'Verifica o status da API'
+        }
+    });
 });
 
-// Inicializa servidor
-app.listen(PORT, () => {
-  console.log(`WhatsApp Flow Endpoint rodando na porta ${PORT}`);
+// Rota de saúde
+app.get('/health', (req, res) => {
+    res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// --- Leitura segura da chave privada RSA ---
-const privateKeyPath = process.env.PRIVATE_KEY_PATH || './private.pem';
-const PASSPHRASE = process.env.PASSPHRASE || null;
+// Rota para descriptografar arquivo via upload
+app.post('/decrypt', upload.single('file'), async (req, res) => {
+    try {
+        const { mediaKey, mediaType = 'document', outputName } = req.body;
+        
+        if (!req.file) {
+            return res.status(400).json({
+                error: 'Nenhum arquivo foi enviado'
+            });
+        }
+        
+        if (!mediaKey) {
+            return res.status(400).json({
+                error: 'mediaKey é obrigatória'
+            });
+        }
 
-let PRIVATE_KEY_PEM;
-try {
-  PRIVATE_KEY_PEM = fs.readFileSync(privateKeyPath, 'utf-8');
-  if (DEBUG_LOGS) console.log(`Chave privada RSA carregada de: ${privateKeyPath}`);
-} catch (err) {
-  console.error(`ERRO ao ler a chave privada RSA no caminho ${privateKeyPath}:`, err.message);
-  process.exit(1);
-}
+        console.log(`📥 Recebendo arquivo: ${req.file.originalname} (${req.file.size} bytes)`);
+        console.log(`🔑 MediaKey: ${mediaKey.substring(0, 20)}...`);
+        console.log(`📄 Tipo de mídia: ${mediaType}`);
 
-// --- Funções de descriptografia e criptografia (mantém as que já te enviei) ---
+        // Descriptografa o arquivo
+        const decryptedBuffer = decrypter.decryptBuffer(req.file.buffer, mediaKey, mediaType);
+        
+        // Detecta o tipo do arquivo
+        const detectedType = decrypter.detectFileType(decryptedBuffer);
+        
+        // Define o nome do arquivo de saída
+        const fileName = outputName || `decrypted_${Date.now()}.${detectedType}`;
+        
+        console.log(`✅ Arquivo descriptografado com sucesso`);
+        console.log(`📁 Tipo detectado: ${detectedType}`);
+        console.log(`💾 Tamanho final: ${decryptedBuffer.length} bytes`);
 
-// decryptAESKey, decryptPayload, encryptResponse ...
+        // Retorna o arquivo descriptografado
+        res.set({
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${fileName}"`,
+            'Content-Length': decryptedBuffer.length
+        });
+        
+        res.send(decryptedBuffer);
 
-// --- Endpoint principal ---
-app.post('/whatsapp-flow-endpoint', upload.none(), async (req, res) => {
-  try {
-    const { encrypted_flow_data, encrypted_aes_key, initial_vector } = req.body;
-
-    if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
-      if (DEBUG_LOGS) console.warn('Requisição com parâmetros faltando:', req.body);
-      return res.status(400).json({ error: 'Missing required parameters' });
+    } catch (error) {
+        console.error('❌ Erro na descriptografia:', error.message);
+        res.status(500).json({
+            error: 'Erro na descriptografia',
+            details: error.message
+        });
     }
+});
 
-    // 1. Decrypt AES key
-    const aesKey = decryptAESKey(encrypted_aes_key);
+// Rota para descriptografar dados em base64
+app.post('/decrypt/buffer', async (req, res) => {
+    try {
+        const { encryptedData, mediaKey, mediaType = 'document', returnBase64 = false } = req.body;
+        
+        if (!encryptedData || !mediaKey) {
+            return res.status(400).json({
+                error: 'encryptedData e mediaKey são obrigatórios'
+            });
+        }
 
-    // 2. Decrypt payload
-    const decryptedData = decryptPayload(encrypted_flow_data, aesKey, initial_vector);
+        console.log(`📥 Descriptografando buffer (${encryptedData.length} chars base64)`);
+        console.log(`🔑 MediaKey: ${mediaKey.substring(0, 20)}...`);
 
-    if (DEBUG_LOGS) console.log('Payload descriptografado:', decryptedData);
+        // Converte de base64 para buffer
+        const encryptedBuffer = Buffer.from(encryptedData, 'base64');
+        
+        // Descriptografa
+        const decryptedBuffer = decrypter.decryptBuffer(encryptedBuffer, mediaKey, mediaType);
+        
+        // Detecta o tipo do arquivo
+        const detectedType = decrypter.detectFileType(decryptedBuffer);
+        
+        console.log(`✅ Buffer descriptografado com sucesso`);
+        console.log(`📁 Tipo detectado: ${detectedType}`);
+        console.log(`💾 Tamanho final: ${decryptedBuffer.length} bytes`);
 
-    // 3. Sua lógica de negócio aqui
-    const responsePayload = {
-      screen: 'SCREEN_NAME',
-      data: {
-        message: 'Resposta segura do seu backend',
-        receivedData: decryptedData,
-      },
-    };
+        const response = {
+            success: true,
+            detectedFileType: detectedType,
+            size: decryptedBuffer.length,
+            data: returnBase64 ? decryptedBuffer.toString('base64') : decryptedBuffer
+        };
 
-    // 4. Encripta resposta
-    const encryptedResponse = encryptResponse(responsePayload, aesKey, Buffer.from(initial_vector, 'base64'));
+        if (returnBase64) {
+            res.json(response);
+        } else {
+            // Retorna o arquivo binário
+            res.set({
+                'Content-Type': 'application/octet-stream',
+                'X-Detected-Type': detectedType,
+                'X-File-Size': decryptedBuffer.length
+            });
+            res.send(decryptedBuffer);
+        }
 
-    // 5. Envia resposta para WhatsApp
-    res.send(encryptedResponse);
-
-  } catch (error) {
-    console.error('Erro no endpoint WhatsApp Flow:', error);
-
-    // Se erro de descriptografia, responde HTTP 421 para WhatsApp tentar novamente
-    if (
-      error.message.includes('bad decrypt') ||
-      error.message.includes('Unsupported state or unable to authenticate data')
-    ) {
-      return res.status(421).send('Decryption failed');
+    } catch (error) {
+        console.error('❌ Erro na descriptografia:', error.message);
+        res.status(500).json({
+            error: 'Erro na descriptografia',
+            details: error.message
+        });
     }
-
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
 });
 
-// --- Inicializa servidor ---
-app.listen(PORT, () => {
-  console.log(`WhatsApp Flow Endpoint rodando na porta ${PORT}`);
+// Rota para testar a descriptografia com arquivo local
+app.post('/decrypt/file', async (req, res) => {
+    try {
+        const { inputPath, mediaKey, mediaType = 'document', outputPath } = req.body;
+        
+        if (!inputPath || !mediaKey) {
+            return res.status(400).json({
+                error: 'inputPath e mediaKey são obrigatórios'
+            });
+        }
+
+        if (!fs.existsSync(inputPath)) {
+            return res.status(404).json({
+                error: 'Arquivo não encontrado',
+                path: inputPath
+            });
+        }
+
+        const finalOutputPath = outputPath || `decrypted_${Date.now()}.bin`;
+        
+        console.log(`📥 Descriptografando arquivo: ${inputPath}`);
+        console.log(`🔑 MediaKey: ${mediaKey.substring(0, 20)}...`);
+        console.log(`💾 Saída: ${finalOutputPath}`);
+
+        const result = await decrypter.decryptFile(inputPath, mediaKey, finalOutputPath, mediaType);
+        
+        res.json({
+            success: true,
+            inputPath: inputPath,
+            outputPath: result,
+            message: 'Arquivo descriptografado com sucesso'
+        });
+
+    } catch (error) {
+        console.error('❌ Erro na descriptografia:', error.message);
+        res.status(500).json({
+            error: 'Erro na descriptografia',
+            details: error.message
+        });
+    }
 });
+
+// Middleware de tratamento de erros
+app.use((error, req, res, next) => {
+    console.error('❌ Erro interno:', error);
+    res.status(500).json({
+        error: 'Erro interno do servidor',
+        details: error.message
+    });
+});
+
+// Inicia o servidor
+app.listen(port, () => {
+    console.log(`🚀 WhatsApp Decrypter API rodando na porta ${port}`);
+    console.log(`📡 Endpoints disponíveis:`);
+    console.log(`   GET  http://localhost:${port}/`);
+    console.log(`   POST http://localhost:${port}/decrypt`);
+    console.log(`   POST http://localhost:${port}/decrypt/buffer`);
+    console.log(`   POST http://localhost:${port}/decrypt/file`);
+    console.log(`   GET  http://localhost:${port}/health`);
+});
+
+module.exports = app;
