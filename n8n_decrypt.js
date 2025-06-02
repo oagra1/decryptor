@@ -14,6 +14,15 @@ class N8NWhatsAppDecrypter {
     async processWhatsAppDocument(webhookData) {
         try {
             console.log('🔄 Processando documento do WhatsApp via N8N');
+            console.log('📦 DADOS COMPLETOS RECEBIDOS:');
+            console.log(JSON.stringify(webhookData, null, 2));
+            console.log('📋 CHAVES DISPONÍVEIS:', Object.keys(webhookData));
+            
+            // Se vier direto do N8N com arquivo baixado
+            if (webhookData.binary && webhookData.json) {
+                console.log('🎯 Detectado formato N8N com binary data');
+                return await this.processN8NBinaryData(webhookData);
+            }
             
             // Extrair dados relevantes do webhook
             const documentMessage = this.extractDocumentData(webhookData);
@@ -62,6 +71,56 @@ class N8NWhatsAppDecrypter {
             
         } catch (error) {
             console.error('❌ Erro no processamento:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Processa dados binários diretos do N8N
+     */
+    async processN8NBinaryData(n8nData) {
+        try {
+            console.log('🔄 Processando dados binários do N8N');
+            
+            // Pegar dados do JSON
+            const jsonData = n8nData.json;
+            const mediaKey = jsonData.mediaKey || 'SUA_MEDIA_KEY_AQUI';
+            const fileName = jsonData.fileName || 'document.pdf';
+            const mimetype = jsonData.mimetype || 'application/pdf';
+            
+            // Pegar arquivo binário
+            const binaryData = n8nData.binary.data;
+            const encryptedBuffer = Buffer.from(binaryData.data, binaryData.encoding || 'base64');
+            
+            console.log(`📋 Dados do N8N:
+   📄 Arquivo: ${fileName}
+   🔑 MediaKey: ${mediaKey.substring(0, 20)}...
+   📏 Tamanho: ${encryptedBuffer.length} bytes
+   📁 Tipo: ${mimetype}`);
+            
+            // Descriptografar
+            console.log('\n🔓 Descriptografando arquivo...');
+            const decryptedBuffer = await this.decryptFile(encryptedBuffer, mediaKey, mimetype);
+            
+            // Salvar arquivo
+            const outputFileName = `decrypted_${Date.now()}_${fileName}`;
+            fs.writeFileSync(outputFileName, decryptedBuffer);
+            
+            console.log(`✅ Arquivo descriptografado: ${outputFileName}`);
+            
+            return {
+                success: true,
+                originalFileName: fileName,
+                decryptedFileName: outputFileName,
+                originalSize: encryptedBuffer.length,
+                decryptedSize: decryptedBuffer.length,
+                mimetype: mimetype,
+                filePath: outputFileName,
+                buffer: decryptedBuffer
+            };
+            
+        } catch (error) {
+            console.error('❌ Erro no processamento N8N:', error.message);
             throw error;
         }
     }
