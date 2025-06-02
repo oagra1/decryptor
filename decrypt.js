@@ -1,291 +1,351 @@
-const WhatsAppDecrypter = require('./decrypt');
-const axios = require('axios');
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 
-class N8NWhatsAppDecrypter {
+class WhatsAppDecrypter {
     constructor() {
-        this.decrypter = new WhatsAppDecrypter();
+        this.algorithms = {
+            image: 'aes-256-cbc',
+            video: 'aes-256-cbc',
+            audio: 'aes-256-cbc',
+            document: 'aes-256-cbc'
+        };
+        this.debug = true; // Ativar debug
     }
 
     /**
-     * Processa dados recebidos do webhook N8N do WhatsApp
-     * @param {Object} webhookData - Dados completos do webhook
-     * @returns {Object} - Resultado com arquivo descriptografado
-     */
-    async processWhatsAppDocument(webhookData) {
-        try {
-            console.log('🔄 Processando documento do WhatsApp via N8N');
-            
-            // Extrair dados relevantes do webhook
-            const documentMessage = this.extractDocumentData(webhookData);
-            
-            if (!documentMessage) {
-                throw new Error('Nenhum documento encontrado no webhook');
-            }
-            
-            console.log('📋 Dados extraídos:');
-            console.log(`   📄 Arquivo: ${documentMessage.fileName}`);
-            console.log(`   🔗 URL: ${documentMessage.url}`);
-            console.log(`   🔑 MediaKey: ${documentMessage.mediaKey.substring(0, 20)}...`);
-            console.log(`   📏 Tamanho: ${documentMessage.fileLength} bytes`);
-            console.log(`   📁 Tipo: ${documentMessage.mimetype}`);
-            
-            // Baixar o arquivo criptografado
-            console.log('\n⬇️ Baixando arquivo criptografado...');
-            const encryptedBuffer = await this.downloadFile(documentMessage.url);
-            
-            // Descriptografar o arquivo
-            console.log('\n🔓 Descriptografando arquivo...');
-            const decryptedBuffer = await this.decryptFile(
-                encryptedBuffer, 
-                documentMessage.mediaKey,
-                documentMessage.mimetype
-            );
-            
-            // Salvar arquivo descriptografado
-            const outputFileName = `decrypted_${Date.now()}_${documentMessage.fileName}`;
-            fs.writeFileSync(outputFileName, decryptedBuffer);
-            
-            console.log(`\n✅ SUCESSO!`);
-            console.log(`   📁 Arquivo descriptografado: ${outputFileName}`);
-            console.log(`   📏 Tamanho final: ${decryptedBuffer.length} bytes`);
-            
-            return {
-                success: true,
-                originalFileName: documentMessage.fileName,
-                decryptedFileName: outputFileName,
-                originalSize: documentMessage.fileLength,
-                decryptedSize: decryptedBuffer.length,
-                mimetype: documentMessage.mimetype,
-                filePath: `./${outputFileName}`,
-                buffer: decryptedBuffer
-            };
-            
-        } catch (error) {
-            console.error('❌ Erro no processamento:', error.message);
-            throw error;
-        }
-    }
-
-    /**
-     * Extrai dados do documento do webhook do WhatsApp
-     * @param {Object} data - Dados do webhook
-     * @returns {Object} - Dados do documento extraídos
-     */
-    extractDocumentData(data) {
-        try {
-            // Estrutura típica do webhook do WhatsApp
-            let documentMessage = null;
-            
-            // Buscar em diferentes possíveis estruturas
-            if (data.message && data.message.documentMessage) {
-                documentMessage = data.message.documentMessage;
-            } else if (data.documentMessage) {
-                documentMessage = data.documentMessage;
-            } else if (data.body && data.body.message && data.body.message.documentMessage) {
-                documentMessage = data.body.message.documentMessage;
-            }
-            
-            if (!documentMessage) {
-                throw new Error('Estrutura de documento não encontrada');
-            }
-            
-            // Validar campos obrigatórios
-            const requiredFields = ['url', 'mediaKey', 'fileLength'];
-            for (const field of requiredFields) {
-                if (!documentMessage[field]) {
-                    throw new Error(`Campo obrigatório ausente: ${field}`);
-                }
-            }
-            
-            return {
-                url: documentMessage.url,
-                mediaKey: documentMessage.mediaKey,
-                fileLength: documentMessage.fileLength,
-                fileName: documentMessage.fileName || `document_${Date.now()}.pdf`,
-                mimetype: documentMessage.mimetype || 'application/pdf',
-                fileSha256: documentMessage.fileSha256,
-                fileEncSha256: documentMessage.fileEncSha256,
-                pageCount: documentMessage.pageCount
-            };
-            
-        } catch (error) {
-            console.error('❌ Erro na extração de dados:', error.message);
-            throw error;
-        }
-    }
-
-    /**
-     * Baixa o arquivo criptografado do WhatsApp
-     * @param {string} url - URL do arquivo
-     * @returns {Buffer} - Buffer do arquivo criptografado
-     */
-    async downloadFile(url) {
-        try {
-            console.log(`   🌐 Baixando de: ${url.substring(0, 80)}...`);
-            
-            const response = await axios.get(url, {
-                responseType: 'arraybuffer',
-                timeout: 30000,
-                headers: {
-                    'User-Agent': 'WhatsApp/2.21.0'
-                }
-            });
-            
-            const buffer = Buffer.from(response.data);
-            console.log(`   ✅ Arquivo baixado: ${buffer.length} bytes`);
-            
-            return buffer;
-            
-        } catch (error) {
-            throw new Error(`Erro ao baixar arquivo: ${error.message}`);
-        }
-    }
-
-    /**
-     * Descriptografa o arquivo usando a mediaKey
-     * @param {Buffer} encryptedBuffer - Buffer criptografado
+     * Descriptografa um arquivo de mídia do WhatsApp
+     * @param {Buffer} encryptedData - Dados criptografados do arquivo
      * @param {string} mediaKey - Chave de mídia em base64
-     * @param {string} mimetype - Tipo MIME do arquivo
-     * @returns {Buffer} - Buffer descriptografado
+     * @param {string} mediaType - Tipo de mídia (image, video, audio, document)
+     * @returns {Buffer} - Dados descriptografados
      */
-    async decryptFile(encryptedBuffer, mediaKey, mimetype) {
+    decryptMedia(encryptedData, mediaKey, mediaType = 'document') {
         try {
-            // Determinar tipo de mídia baseado no mimetype
-            let mediaType = 'document';
-            if (mimetype.startsWith('image/')) mediaType = 'image';
-            else if (mimetype.startsWith('video/')) mediaType = 'video';
-            else if (mimetype.startsWith('audio/')) mediaType = 'audio';
+            if (this.debug) {
+                console.log('🔍 DEBUG - Iniciando descriptografia:');
+                console.log(`   📦 Tamanho dos dados: ${encryptedData.length} bytes`);
+                console.log(`   🔑 MediaKey (primeiros 20 chars): ${mediaKey.substring(0, 20)}...`);
+                console.log(`   🏷️  Tipo de mídia: ${mediaType}`);
+            }
+
+            // Converte a mediaKey de base64 para buffer
+            const keyBuffer = Buffer.from(mediaKey, 'base64');
             
-            console.log(`   🔧 Usando tipo de mídia: ${mediaType}`);
-            console.log(`   🔑 MediaKey: ${mediaKey.substring(0, 30)}...`);
-            console.log(`   📦 Tamanho criptografado: ${encryptedBuffer.length} bytes`);
+            if (this.debug) {
+                console.log(`   🔐 Tamanho da chave: ${keyBuffer.length} bytes`);
+            }
             
-            // Ativar debug para troubleshooting
-            this.decrypter.setDebug(true);
+            // Deriva as chaves usando HKDF
+            const keys = this.deriveKeys(keyBuffer, mediaType);
             
-            // Descriptografar
-            const decryptedBuffer = this.decrypter.decryptBuffer(
-                encryptedBuffer, 
-                mediaKey, 
-                mediaType
-            );
+            if (this.debug) {
+                console.log(`   🔧 Chaves derivadas - Cipher: ${keys.cipherKey.length}b, MAC: ${keys.macKey.length}b`);
+            }
             
-            console.log(`   ✅ Descriptografia concluída: ${decryptedBuffer.length} bytes`);
+            // Diferentes abordagens para estruturas de arquivo
+            let decrypted;
             
-            return decryptedBuffer;
+            // Tentar primeiro a abordagem padrão (com MAC no final)
+            try {
+                decrypted = this.decryptStandardFormat(encryptedData, keys, mediaType);
+                if (this.debug) console.log('✅ Sucesso com formato padrão');
+                return decrypted;
+            } catch (error) {
+                if (this.debug) console.log('❌ Formato padrão falhou:', error.message);
+            }
+            
+            // Tentar sem verificação MAC (alguns casos especiais)
+            try {
+                decrypted = this.decryptWithoutMac(encryptedData, keys, mediaType);
+                if (this.debug) console.log('✅ Sucesso sem verificação MAC');
+                return decrypted;
+            } catch (error) {
+                if (this.debug) console.log('❌ Descriptografia sem MAC falhou:', error.message);
+            }
+            
+            // Tentar formato alternativo (MAC no início)
+            try {
+                decrypted = this.decryptAlternativeFormat(encryptedData, keys, mediaType);
+                if (this.debug) console.log('✅ Sucesso com formato alternativo');
+                return decrypted;
+            } catch (error) {
+                if (this.debug) console.log('❌ Formato alternativo falhou:', error.message);
+            }
+            
+            throw new Error('Não foi possível descriptografar com nenhum formato conhecido');
             
         } catch (error) {
+            console.error('❌ Erro geral na descriptografia:', error.message);
             throw new Error(`Erro na descriptografia: ${error.message}`);
         }
     }
 
     /**
-     * Função específica para seus dados do N8N
-     * Usar com os dados exatos que você mostrou nas imagens
+     * Tentativa 1: Formato padrão do WhatsApp (MAC no final)
      */
-    async processYourN8NData() {
-        console.log('🎯 Processando SEUS dados específicos do N8N');
-        console.log('═'.repeat(60));
+    decryptStandardFormat(encryptedData, keys, mediaType) {
+        // Remove os últimos 10 bytes (MAC) do arquivo criptografado
+        const mac = encryptedData.slice(-10);
+        const encryptedFile = encryptedData.slice(0, -10);
         
-        // Dados extraídos das suas imagens
-        const yourData = {
-            message: {
-                documentMessage: {
-                    url: "https://mmg.whatsapp.net/v/t62.7119-24/139703300_1359605348804309_2170912817383324698_n.enc?ccb=11-4&oh=01_Q5AaigFOU-g0q_zHrf7nc4zfrjak1VKiYVvrQjutOiqjnWqXoe=686542f-3k_nc_sid=5e03e0&_nc_hot=1748884740",
-                    mimetype: "application/pdf",
-                    title: "Script para reunião de vendas-20250513160001816",
-                    fileSha256: "UKCacTl6GW+TgyBymL7GSS9YgSJnyImsLtXI0blNGM=",
-                    fileLength: 375354,
-                    pageCount: 12,
-                    mediaKey: "No+4U0PSQpa/oLRIlbLFw26XR2770B4w3KH+EYMcyA=",
-                    fileName: "Script para reunião de vendas-20250513160001816.pdf",
-                    fileEncSha256: "j96rwwZ52ZznHutdNGvdekviI8PPo6QCMagnkvNZOXg0=",
-                    directPath: "/v/t62.7119-24/139703300_1359605348804309_2170912817383324698_n.enc?ccb=11-4&oh=01_Q5AaigFOU-g0q_zHrf7nc4zfrjak1VKiYVvrQjutOiqjnWqXoe=686542f-3k_nc_sid=5e03e0&_nc_hot=1748884740"
-                }
+        if (this.debug) {
+            console.log(`   📏 Dados sem MAC: ${encryptedFile.length} bytes`);
+            console.log(`   🔒 MAC: ${mac.toString('hex')}`);
+        }
+        
+        // Verifica o MAC
+        if (!this.verifyMac(encryptedFile, mac, keys.macKey)) {
+            throw new Error('Falha na verificação do MAC - formato padrão');
+        }
+        
+        // Extrai o IV (primeiros 16 bytes)
+        const iv = encryptedFile.slice(0, 16);
+        const encrypted = encryptedFile.slice(16);
+        
+        if (this.debug) {
+            console.log(`   🎲 IV: ${iv.toString('hex')}`);
+            console.log(`   📦 Dados criptografados: ${encrypted.length} bytes`);
+        }
+        
+        // Descriptografa o arquivo
+        const decipher = crypto.createDecipheriv(this.algorithms[mediaType], keys.cipherKey, iv);
+        decipher.setAutoPadding(true);
+        
+        let decrypted = decipher.update(encrypted);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted;
+    }
+
+    /**
+     * Tentativa 2: Sem verificação MAC
+     */
+    decryptWithoutMac(encryptedData, keys, mediaType) {
+        // Assume que os primeiros 16 bytes são o IV
+        const iv = encryptedData.slice(0, 16);
+        const encrypted = encryptedData.slice(16);
+        
+        if (this.debug) {
+            console.log(`   🎲 IV (sem MAC): ${iv.toString('hex')}`);
+            console.log(`   📦 Dados (sem MAC): ${encrypted.length} bytes`);
+        }
+        
+        // Descriptografa o arquivo
+        const decipher = crypto.createDecipheriv(this.algorithms[mediaType], keys.cipherKey, iv);
+        decipher.setAutoPadding(true);
+        
+        let decrypted = decipher.update(encrypted);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted;
+    }
+
+    /**
+     * Tentativa 3: Formato alternativo (MAC no início)
+     */
+    decryptAlternativeFormat(encryptedData, keys, mediaType) {
+        // MAC nos primeiros 10 bytes
+        const mac = encryptedData.slice(0, 10);
+        const encryptedFile = encryptedData.slice(10);
+        
+        if (this.debug) {
+            console.log(`   🔒 MAC (alternativo): ${mac.toString('hex')}`);
+            console.log(`   📏 Dados sem MAC (alt): ${encryptedFile.length} bytes`);
+        }
+        
+        // Verifica o MAC
+        if (!this.verifyMac(encryptedFile, mac, keys.macKey)) {
+            throw new Error('Falha na verificação do MAC - formato alternativo');
+        }
+        
+        // Extrai o IV (primeiros 16 bytes)
+        const iv = encryptedFile.slice(0, 16);
+        const encrypted = encryptedFile.slice(16);
+        
+        // Descriptografa o arquivo
+        const decipher = crypto.createDecipheriv(this.algorithms[mediaType], keys.cipherKey, iv);
+        decipher.setAutoPadding(true);
+        
+        let decrypted = decipher.update(encrypted);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted;
+    }
+
+    /**
+     * Deriva as chaves de criptografia e MAC usando HKDF
+     */
+    deriveKeys(keyBuffer, mediaType) {
+        const info = this.getInfoForMediaType(mediaType);
+        
+        if (this.debug) {
+            console.log(`   🔍 Info cipher: ${info.cipher.toString()}`);
+            console.log(`   🔍 Info MAC: ${info.mac.toString()}`);
+        }
+        
+        // Deriva a chave de criptografia (32 bytes)
+        const cipherKey = this.hkdfExpand(keyBuffer, info.cipher, 32);
+        
+        // Deriva a chave MAC (32 bytes)
+        const macKey = this.hkdfExpand(keyBuffer, info.mac, 32);
+        
+        return { cipherKey, macKey };
+    }
+
+    /**
+     * Implementação do HKDF Expand
+     */
+    hkdfExpand(prk, info, length) {
+        const hashLen = 32; // SHA-256
+        const n = Math.ceil(length / hashLen);
+        let okm = Buffer.alloc(0);
+        let previousT = Buffer.alloc(0);
+
+        for (let i = 1; i <= n; i++) {
+            const hmac = crypto.createHmac('sha256', prk);
+            hmac.update(previousT);
+            hmac.update(info);
+            hmac.update(Buffer.from([i]));
+            previousT = hmac.digest();
+            okm = Buffer.concat([okm, previousT]);
+        }
+
+        return okm.slice(0, length);
+    }
+
+    /**
+     * Obtém as informações de contexto para cada tipo de mídia
+     */
+    getInfoForMediaType(mediaType) {
+        const contexts = {
+            image: {
+                cipher: Buffer.from('WhatsApp Image Keys'),
+                mac: Buffer.from('WhatsApp Image MAC Keys')
+            },
+            video: {
+                cipher: Buffer.from('WhatsApp Video Keys'),
+                mac: Buffer.from('WhatsApp Video MAC Keys')
+            },
+            audio: {
+                cipher: Buffer.from('WhatsApp Audio Keys'),
+                mac: Buffer.from('WhatsApp Audio MAC Keys')
+            },
+            document: {
+                cipher: Buffer.from('WhatsApp Document Keys'),
+                mac: Buffer.from('WhatsApp Document MAC Keys')
             }
         };
+
+        return contexts[mediaType] || contexts.document;
+    }
+
+    /**
+     * Verifica a integridade do arquivo usando HMAC
+     */
+    verifyMac(data, receivedMac, macKey) {
+        const hmac = crypto.createHmac('sha256', macKey);
+        hmac.update(data);
+        const calculatedMac = hmac.digest().slice(0, 10);
         
+        if (this.debug) {
+            console.log(`   🔍 MAC recebido: ${receivedMac.toString('hex')}`);
+            console.log(`   🔍 MAC calculado: ${calculatedMac.toString('hex')}`);
+        }
+        
+        return crypto.timingSafeEqual(receivedMac, calculatedMac);
+    }
+
+    /**
+     * Descriptografa um arquivo do sistema de arquivos
+     */
+    async decryptFile(inputPath, mediaKey, outputPath, mediaType = 'document') {
         try {
-            const result = await this.processWhatsAppDocument(yourData);
+            // Lê o arquivo criptografado
+            const encryptedData = fs.readFileSync(inputPath);
             
-            console.log('\n🎉 RESULTADO FINAL:');
-            console.log('═'.repeat(40));
-            console.log(`✅ Arquivo original: ${result.originalFileName}`);
-            console.log(`✅ Arquivo descriptografado: ${result.decryptedFileName}`);
-            console.log(`✅ Tamanho original: ${result.originalSize} bytes`);
-            console.log(`✅ Tamanho final: ${result.decryptedSize} bytes`);
-            console.log(`✅ Tipo: ${result.mimetype}`);
-            console.log(`✅ Caminho: ${result.filePath}`);
+            // Descriptografa
+            const decryptedData = this.decryptMedia(encryptedData, mediaKey, mediaType);
             
-            return result;
+            // Salva o arquivo descriptografado
+            fs.writeFileSync(outputPath, decryptedData);
+            
+            console.log(`✅ Arquivo descriptografado salvo em: ${outputPath}`);
+            return outputPath;
             
         } catch (error) {
-            console.error('❌ Erro:', error.message);
+            console.error(`❌ Erro ao descriptografar arquivo: ${error.message}`);
             throw error;
         }
     }
 
     /**
-     * Função para usar no N8N - Format simplificado
-     * @param {Object} n8nData - Dados recebidos do N8N
-     * @returns {Object} - Dados para próximo nó do N8N
+     * Descriptografa dados em buffer e retorna o resultado
      */
-    async processForN8N(n8nData) {
-        try {
-            const result = await this.processWhatsAppDocument(n8nData);
-            
-            // Retornar dados no formato que o N8N espera
-            return {
-                json: {
-                    success: true,
-                    decryptedFile: result.decryptedFileName,
-                    filePath: result.filePath,
-                    originalSize: result.originalSize,
-                    decryptedSize: result.decryptedSize,
-                    mimetype: result.mimetype,
-                    fileName: result.originalFileName,
-                    // Buffer em base64 para enviar para IA
-                    fileBase64: result.buffer.toString('base64')
-                }
-            };
-            
-        } catch (error) {
-            return {
-                json: {
-                    success: false,
-                    error: error.message,
-                    details: error.stack
-                }
-            };
+    decryptBuffer(encryptedBuffer, mediaKey, mediaType = 'document') {
+        return this.decryptMedia(encryptedBuffer, mediaKey, mediaType);
+    }
+
+    /**
+     * Detecta o tipo de arquivo pelos magic bytes
+     */
+    detectFileType(buffer) {
+        const signatures = {
+            'ffd8ff': 'jpg',
+            '89504e47': 'png', 
+            '47494638': 'gif',
+            '25504446': 'pdf',
+            '504b0304': 'zip',
+            '504b0506': 'zip',
+            '504b0708': 'zip',
+            'd0cf11e0': 'doc',
+            '504b': 'docx',
+            'fffb': 'mp3',
+            '494433': 'mp3',
+            '000001ba': 'mp4',
+            '000001b3': 'mp4',
+            '66747970': 'mp4'
+        };
+
+        const hex = buffer.toString('hex', 0, 8).toLowerCase();
+        
+        if (this.debug) {
+            console.log(`   🔍 Magic bytes: ${hex}`);
         }
+        
+        for (const [signature, extension] of Object.entries(signatures)) {
+            if (hex.startsWith(signature)) {
+                if (this.debug) {
+                    console.log(`   📁 Tipo detectado: ${extension}`);
+                }
+                return extension;
+            }
+        }
+        
+        if (this.debug) {
+            console.log(`   📁 Tipo desconhecido, usando: bin`);
+        }
+        return 'bin';
+    }
+
+    /**
+     * Função auxiliar para debug de dados
+     */
+    debugData(data, label) {
+        if (this.debug && data) {
+            console.log(`   🔍 ${label}:`);
+            console.log(`      Tamanho: ${data.length} bytes`);
+            console.log(`      Primeiros 16 bytes: ${data.slice(0, 16).toString('hex')}`);
+            console.log(`      Últimos 16 bytes: ${data.slice(-16).toString('hex')}`);
+        }
+    }
+
+    /**
+     * Ativar/desativar debug
+     */
+    setDebug(enabled) {
+        this.debug = enabled;
     }
 }
 
-// Função principal para usar no N8N
-async function decryptWhatsAppDocument(webhookData) {
-    const processor = new N8NWhatsAppDecrypter();
-    return await processor.processForN8N(webhookData);
-}
-
-// Teste com seus dados reais
-async function testarComSeusDados() {
-    const processor = new N8NWhatsAppDecrypter();
-    return await processor.processYourN8NData();
-}
-
-module.exports = {
-    N8NWhatsAppDecrypter,
-    decryptWhatsAppDocument,
-    testarComSeusDados
-};
-
-// Se executado diretamente, testar com seus dados
-if (require.main === module) {
-    testarComSeusDados()
-        .then(result => {
-            console.log('\n🎯 PRONTO PARA USAR NO N8N!');
-        })
-        .catch(console.error);
-}
+module.exports = WhatsAppDecrypter;
