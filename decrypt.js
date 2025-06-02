@@ -27,10 +27,12 @@ function decryptMedia(buffer, mediaKeyBase64, mediaType) {
   const expandedKey = hkdf(mediaKey, 112, info[mediaType]);
   const iv = expandedKey.slice(0, 16);
   const cipherKey = expandedKey.slice(16, 48);
-  const file = buffer.slice(0, buffer.length - 10); // remove MAC
+
+  // Remove os últimos 10 bytes (MAC)
+  const file = buffer.slice(0, buffer.length - 10);
 
   const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
-  decipher.setAutoPadding(false);
+  decipher.setAutoPadding(true); // Importante para arquivos PDF/DOCX
 
   let decrypted = Buffer.concat([decipher.update(file), decipher.final()]);
   return decrypted;
