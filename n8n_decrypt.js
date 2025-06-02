@@ -21,52 +21,40 @@ class N8NWhatsAppDecrypter {
             // FORÇA BRUTAL - TESTAR TODAS AS POSSIBILIDADES
             let mediaKey, fileData;
             
-            // Teste 1: Se for array
-            if (Array.isArray(data) && data.length > 0) {
-                console.log('📋 ARRAY DETECTADO');
-                mediaKey = data[0];
-                fileData = data[3] || data[1];
-                console.log(`Array[0]: ${data[0]}`);
-                console.log(`Array[1]: ${data[1]}`);
-                console.log(`Array[2]: ${data[2]}`);
-                console.log(`Array[3]: ${data[3]}`);
-            }
+            console.log('🔍 EXTRAINDO DADOS BASEADO NO DEBUG');
             
-            // Teste 2: Propriedades diretas
-            if (!mediaKey) {
-                console.log('📋 TESTANDO PROPRIEDADES DIRETAS');
-                mediaKey = data.mediaKey || data['mediaKey'] || data[0];
-                fileData = data.fileData || data['fileData'] || data[3];
-                console.log(`data.mediaKey: ${data.mediaKey}`);
-                console.log(`data.fileData: ${!!data.fileData}`);
-            }
-            
-            // Teste 3: Procurar em todo o objeto
-            if (!mediaKey) {
-                console.log('📋 BUSCA PROFUNDA');
-                for (let key in data) {
-                    console.log(`Chave encontrada: ${key} = ${data[key]}`);
-                    if (key.toLowerCase().includes('mediakey') || key.toLowerCase().includes('key')) {
-                        mediaKey = data[key];
-                        console.log(`✅ MediaKey encontrada em: ${key}`);
-                    }
-                    if (key.toLowerCase().includes('filedata') || key.toLowerCase().includes('data')) {
-                        fileData = data[key];
-                        console.log(`✅ FileData encontrada em: ${key}`);
+            // Baseado no que vimos - tem keys[0,1,2,3] e ownPropertyNames[0,1,2,3]
+            try {
+                mediaKey = data.mediaKey || data['mediaKey'] || data[0] || data['0'];
+                fileData = data.fileData || data['fileData'] || data[3] || data['3'];
+                
+                console.log(`Tentativa 1 - MediaKey: ${mediaKey ? 'OK' : 'FAIL'}`);
+                console.log(`Tentativa 1 - FileData: ${fileData ? 'OK' : 'FAIL'}`);
+                
+                // Se não achou, força loop pelas propriedades
+                if (!mediaKey || !fileData) {
+                    console.log('🔄 Forçando loop pelas propriedades...');
+                    
+                    const keys = Object.keys(data);
+                    console.log(`Keys encontradas: ${keys}`);
+                    
+                    for (let i = 0; i < keys.length; i++) {
+                        const key = keys[i];
+                        const value = data[key];
+                        console.log(`Propriedade[${i}]: ${key} = ${typeof value} (${String(value).substring(0, 50)}...)`);
+                        
+                        if (i === 0 || key.toLowerCase().includes('mediakey')) {
+                            mediaKey = value;
+                            console.log(`✅ MediaKey capturada: ${key}`);
+                        }
+                        if (i === 3 || key.toLowerCase().includes('filedata')) {
+                            fileData = value;
+                            console.log(`✅ FileData capturada: ${key}`);
+                        }
                     }
                 }
-            }
-            
-            // Teste 4: Se for string JSON
-            if (!mediaKey && typeof data === 'string') {
-                console.log('📋 TENTANDO PARSE JSON');
-                try {
-                    const parsed = JSON.parse(data);
-                    mediaKey = parsed.mediaKey;
-                    fileData = parsed.fileData;
-                } catch (e) {
-                    console.log('Não é JSON válido');
-                }
+            } catch (e) {
+                console.log('Erro na extração:', e.message);
             }
             
             // USAR VALORES HARDCODED SE NECESSÁRIO
