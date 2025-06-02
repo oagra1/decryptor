@@ -2,13 +2,16 @@ const crypto = require('crypto');
 
 /**
  * Decrypts WhatsApp media file
+ * @param {Buffer} encryptedBuffer - Encrypted file buffer
+ * @param {string} mediaKeyBase64 - Base64 encoded media key
+ * @param {string} fileEncSha256Base64 - Base64 encoded SHA256 of encrypted file
+ * @returns {Buffer} Decrypted file buffer
  */
-async function decryptWhatsAppFile({ fileData, mediaKey, fileEncSha256, mimetype, fileName }) {
+async function decryptWhatsAppMedia(encryptedBuffer, mediaKeyBase64, fileEncSha256Base64) {
     try {
-        // Convert base64 to buffers
-        const encryptedBuffer = Buffer.from(fileData, 'base64');
-        const mediaKeyBuffer = Buffer.from(mediaKey, 'base64');
-        const expectedSha256 = Buffer.from(fileEncSha256, 'base64');
+        // Convert base64 inputs to buffers
+        const mediaKey = Buffer.from(mediaKeyBase64, 'base64');
+        const expectedSha256 = Buffer.from(fileEncSha256Base64, 'base64');
 
         // Verify file integrity
         const actualSha256 = crypto.createHash('sha256').update(encryptedBuffer).digest();
@@ -17,19 +20,23 @@ async function decryptWhatsAppFile({ fileData, mediaKey, fileEncSha256, mimetype
         }
 
         // Expand media key using HKDF
-        const expandedKey = hkdfExpand(mediaKeyBuffer, 112);
+        const expandedKey = expandMediaKey(mediaKey);
         
-        // Extract keys
+        // Extract components
         const iv = expandedKey.slice(0, 16);
         const cipherKey = expandedKey.slice(16, 48);
         const macKey = expandedKey.slice(48, 80);
 
-        // Extract MAC and encrypted data
+        // Extract MAC from end of file
         const fileMac = encryptedBuffer.slice(-10);
         const encryptedData = encryptedBuffer.slice(0, -10);
 
         // Verify MAC
-        const calculatedMac = calculateMac(iv, encryptedData, macKey);
+        const hmac = crypto.createHmac('sha256', macKey);
+        hmac.update(iv);
+        hmac.update(encryptedData);
+        const calculatedMac = hmac.digest();
+        
         if (!calculatedMac.slice(0, 10).equals(fileMac)) {
             throw new Error('MAC verification failed - file may be corrupted');
         }
@@ -41,12 +48,7 @@ async function decryptWhatsAppFile({ fileData, mediaKey, fileEncSha256, mimetype
             decipher.final()
         ]);
 
-        return {
-            decryptedFile: decrypted.toString('base64'),
-            mimetype: mimetype || 'application/octet-stream',
-            fileName: fileName || 'decrypted_file',
-            fileSize: decrypted.length
-        };
+        return decrypted;
 
     } catch (error) {
         throw new Error(`Decryption failed: ${error.message}`);
@@ -54,24 +56,26 @@ async function decryptWhatsAppFile({ fileData, mediaKey, fileEncSha256, mimetype
 }
 
 /**
- * HKDF Expand function for key derivation
+ * Expands media key using HKDF-SHA256
+ * @param {Buffer} mediaKey - 32 byte media key
+ * @returns {Buffer} 112 byte expanded key
  */
-function hkdfExpand(mediaKey, length) {
+function expandMediaKey(mediaKey) {
     const salt = Buffer.from('WhatsApp Media Keys', 'utf8');
-    const info = Buffer.alloc(0);
     
-    // Extract
+    // HKDF Extract
     const prk = crypto.createHmac('sha256', salt).update(mediaKey).digest();
     
-    // Expand
+    // HKDF Expand (we need 112 bytes)
+    const keyLength = 112;
     let expandedKey = Buffer.alloc(0);
     let previousBlock = Buffer.alloc(0);
     let counter = 1;
 
-    while (expandedKey.length < length) {
+    while (expandedKey.length < keyLength) {
         const hmac = crypto.createHmac('sha256', prk);
         hmac.update(previousBlock);
-        hmac.update(info);
+        hmac.update(Buffer.alloc(0)); // empty info
         hmac.update(Buffer.from([counter]));
         
         previousBlock = hmac.digest();
@@ -79,17 +83,7 @@ function hkdfExpand(mediaKey, length) {
         counter++;
     }
 
-    return expandedKey.slice(0, length);
+    return expandedKey.slice(0, keyLength);
 }
 
-/**
- * Calculate MAC for verification
- */
-function calculateMac(iv, encryptedData, macKey) {
-    const hmac = crypto.createHmac('sha256', macKey);
-    hmac.update(iv);
-    hmac.update(encryptedData);
-    return hmac.digest();
-}
-
-module.exports = { decryptWhatsAppFile };
+module.exports = { decryptWhatsAppMedia };
