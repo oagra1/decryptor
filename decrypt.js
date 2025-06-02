@@ -32,7 +32,7 @@ function decryptMedia(buffer, mediaKeyBase64, mediaType) {
   const file = buffer.slice(0, buffer.length - 10);
 
   const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
-  decipher.setAutoPadding(true); // Importante para arquivos PDF/DOCX
+  decipher.setAutoPadding(true);
 
   let decrypted = Buffer.concat([decipher.update(file), decipher.final()]);
   return decrypted;
