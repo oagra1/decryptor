@@ -251,6 +251,43 @@ app.post('/decrypt/file', async (req, res) => {
     }
 });
 
+// Rota SIMPLES E DIRETA - FAZ O QUE VOCÊ QUER
+app.post('/simple/decrypt', upload.single('file'), async (req, res) => {
+    try {
+        const { mediaKey } = req.body;
+        
+        console.log('🎯 ROTA SIMPLES');
+        console.log(`📁 Arquivo: ${req.file ? 'OK' : 'FALTOU'}`);
+        console.log(`🔑 MediaKey: ${mediaKey ? 'OK' : 'FALTOU'}`);
+        
+        if (!req.file || !mediaKey) {
+            return res.status(400).json({
+                error: 'Preciso do arquivo e mediaKey'
+            });
+        }
+        
+        // Descriptografar DIRETO
+        decrypter.setDebug(true);
+        const decryptedBuffer = decrypter.decryptBuffer(req.file.buffer, mediaKey, 'document');
+        
+        console.log(`✅ FUNCIONOU: ${decryptedBuffer.length} bytes`);
+        
+        // Retornar arquivo direto
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': 'attachment; filename="decrypted.pdf"'
+        });
+        
+        res.send(decryptedBuffer);
+        
+    } catch (error) {
+        console.error('❌ ERRO SIMPLES:', error.message);
+        res.status(500).json({
+            error: error.message
+        });
+    }
+});
+
 // Rota específica para N8N - Processa webhook do WhatsApp
 app.post('/n8n/decrypt', async (req, res) => {
     try {
