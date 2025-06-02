@@ -13,19 +13,29 @@ class N8NWhatsAppDecrypter {
         try {
             console.log('🔄 PROCESSAMENTO N8N FINAL');
             console.log('📦 Dados recebidos completos:', JSON.stringify(data, null, 2));
+            console.log('📦 Tipo dos dados:', typeof data);
+            console.log('📦 É array?', Array.isArray(data));
             
             // BUSCAR OS DADOS EXATAMENTE COMO VÊM DO N8N
             let mediaKey, fileName, mimetype, fileData;
             
-            // Método 1: Dados diretos no root
-            if (data.mediaKey && data.fileData) {
+            // Método 1: Dados como ARRAY (seu caso atual)
+            if (Array.isArray(data) && data.length >= 4) {
+                mediaKey = data[0];
+                fileName = data[1] || 'document.pdf';
+                mimetype = data[2] || 'application/pdf';
+                fileData = data[3];
+                console.log('✅ Encontrado como array: [mediaKey, fileName, mimetype, fileData]');
+            }
+            // Método 2: Dados diretos no root
+            else if (data.mediaKey && data.fileData) {
                 mediaKey = data.mediaKey;
                 fileName = data.fileName || 'document.pdf';
                 mimetype = data.mimetype || 'application/pdf';
                 fileData = data.fileData;
                 console.log('✅ Encontrado no root dos dados');
             }
-            // Método 2: Dentro de body.data (estrutura N8N)
+            // Método 3: Dentro de body.data (estrutura N8N)
             else if (data.body && data.body.data) {
                 const bodyData = data.body.data;
                 mediaKey = bodyData.mediaKey;
@@ -34,7 +44,7 @@ class N8NWhatsAppDecrypter {
                 fileData = bodyData.fileData;
                 console.log('✅ Encontrado em body.data');
             }
-            // Método 3: Estrutura WhatsApp webhook
+            // Método 4: Estrutura WhatsApp webhook
             else if (data.message && data.message.documentMessage) {
                 const doc = data.message.documentMessage;
                 mediaKey = doc.mediaKey;
@@ -47,7 +57,8 @@ class N8NWhatsAppDecrypter {
             else {
                 console.log('❌ Estrutura não reconhecida');
                 console.log('Chaves disponíveis:', Object.keys(data));
-                throw new Error(`Estrutura não reconhecida. Chaves: ${Object.keys(data).join(', ')}`);
+                console.log('Dados completos:', data);
+                throw new Error(`Estrutura não reconhecida. Tipo: ${typeof data}, É array: ${Array.isArray(data)}, Chaves: ${Object.keys(data).join(', ')}`);
             }
             
             console.log('🔍 Dados extraídos:');
