@@ -10,6 +10,7 @@ class WhatsAppDecrypter {
             audio: 'aes-256-cbc',
             document: 'aes-256-cbc'
         };
+        this.debug = true; // Ativar debug
     }
 
     /**
@@ -21,45 +22,167 @@ class WhatsAppDecrypter {
      */
     decryptMedia(encryptedData, mediaKey, mediaType = 'document') {
         try {
+            if (this.debug) {
+                console.log('🔍 DEBUG - Iniciando descriptografia:');
+                console.log(`   📦 Tamanho dos dados: ${encryptedData.length} bytes`);
+                console.log(`   🔑 MediaKey (primeiros 20 chars): ${mediaKey.substring(0, 20)}...`);
+                console.log(`   🏷️  Tipo de mídia: ${mediaType}`);
+            }
+
             // Converte a mediaKey de base64 para buffer
             const keyBuffer = Buffer.from(mediaKey, 'base64');
+            
+            if (this.debug) {
+                console.log(`   🔐 Tamanho da chave: ${keyBuffer.length} bytes`);
+            }
             
             // Deriva as chaves usando HKDF
             const keys = this.deriveKeys(keyBuffer, mediaType);
             
-            // Remove os últimos 10 bytes (MAC) do arquivo criptografado
-            const mac = encryptedData.slice(-10);
-            const encryptedFile = encryptedData.slice(0, -10);
-            
-            // Verifica o MAC
-            if (!this.verifyMac(encryptedFile, mac, keys.macKey)) {
-                throw new Error('Falha na verificação do MAC - arquivo pode estar corrompido');
+            if (this.debug) {
+                console.log(`   🔧 Chaves derivadas - Cipher: ${keys.cipherKey.length}b, MAC: ${keys.macKey.length}b`);
             }
             
-            // Extrai o IV (primeiros 16 bytes)
-            const iv = encryptedFile.slice(0, 16);
-            const encrypted = encryptedFile.slice(16);
+            // Diferentes abordagens para estruturas de arquivo
+            let decrypted;
             
-            // Descriptografa o arquivo
-            const decipher = crypto.createDecipheriv(this.algorithms[mediaType], keys.cipherKey, iv);
-            let decrypted = decipher.update(encrypted);
-            decrypted = Buffer.concat([decrypted, decipher.final()]);
+            // Tentar primeiro a abordagem padrão (com MAC no final)
+            try {
+                decrypted = this.decryptStandardFormat(encryptedData, keys, mediaType);
+                if (this.debug) console.log('✅ Sucesso com formato padrão');
+                return decrypted;
+            } catch (error) {
+                if (this.debug) console.log('❌ Formato padrão falhou:', error.message);
+            }
             
-            return decrypted;
+            // Tentar sem verificação MAC (alguns casos especiais)
+            try {
+                decrypted = this.decryptWithoutMac(encryptedData, keys, mediaType);
+                if (this.debug) console.log('✅ Sucesso sem verificação MAC');
+                return decrypted;
+            } catch (error) {
+                if (this.debug) console.log('❌ Descriptografia sem MAC falhou:', error.message);
+            }
+            
+            // Tentar formato alternativo (MAC no início)
+            try {
+                decrypted = this.decryptAlternativeFormat(encryptedData, keys, mediaType);
+                if (this.debug) console.log('✅ Sucesso com formato alternativo');
+                return decrypted;
+            } catch (error) {
+                if (this.debug) console.log('❌ Formato alternativo falhou:', error.message);
+            }
+            
+            throw new Error('Não foi possível descriptografar com nenhum formato conhecido');
             
         } catch (error) {
+            console.error('❌ Erro geral na descriptografia:', error.message);
             throw new Error(`Erro na descriptografia: ${error.message}`);
         }
     }
 
     /**
+     * Tentativa 1: Formato padrão do WhatsApp (MAC no final)
+     */
+    decryptStandardFormat(encryptedData, keys, mediaType) {
+        // Remove os últimos 10 bytes (MAC) do arquivo criptografado
+        const mac = encryptedData.slice(-10);
+        const encryptedFile = encryptedData.slice(0, -10);
+        
+        if (this.debug) {
+            console.log(`   📏 Dados sem MAC: ${encryptedFile.length} bytes`);
+            console.log(`   🔒 MAC: ${mac.toString('hex')}`);
+        }
+        
+        // Verifica o MAC
+        if (!this.verifyMac(encryptedFile, mac, keys.macKey)) {
+            throw new Error('Falha na verificação do MAC - formato padrão');
+        }
+        
+        // Extrai o IV (primeiros 16 bytes)
+        const iv = encryptedFile.slice(0, 16);
+        const encrypted = encryptedFile.slice(16);
+        
+        if (this.debug) {
+            console.log(`   🎲 IV: ${iv.toString('hex')}`);
+            console.log(`   📦 Dados criptografados: ${encrypted.length} bytes`);
+        }
+        
+        // Descriptografa o arquivo
+        const decipher = crypto.createDecipheriv(this.algorithms[mediaType], keys.cipherKey, iv);
+        decipher.setAutoPadding(true);
+        
+        let decrypted = decipher.update(encrypted);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted;
+    }
+
+    /**
+     * Tentativa 2: Sem verificação MAC
+     */
+    decryptWithoutMac(encryptedData, keys, mediaType) {
+        // Assume que os primeiros 16 bytes são o IV
+        const iv = encryptedData.slice(0, 16);
+        const encrypted = encryptedData.slice(16);
+        
+        if (this.debug) {
+            console.log(`   🎲 IV (sem MAC): ${iv.toString('hex')}`);
+            console.log(`   📦 Dados (sem MAC): ${encrypted.length} bytes`);
+        }
+        
+        // Descriptografa o arquivo
+        const decipher = crypto.createDecipheriv(this.algorithms[mediaType], keys.cipherKey, iv);
+        decipher.setAutoPadding(true);
+        
+        let decrypted = decipher.update(encrypted);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted;
+    }
+
+    /**
+     * Tentativa 3: Formato alternativo (MAC no início)
+     */
+    decryptAlternativeFormat(encryptedData, keys, mediaType) {
+        // MAC nos primeiros 10 bytes
+        const mac = encryptedData.slice(0, 10);
+        const encryptedFile = encryptedData.slice(10);
+        
+        if (this.debug) {
+            console.log(`   🔒 MAC (alternativo): ${mac.toString('hex')}`);
+            console.log(`   📏 Dados sem MAC (alt): ${encryptedFile.length} bytes`);
+        }
+        
+        // Verifica o MAC
+        if (!this.verifyMac(encryptedFile, mac, keys.macKey)) {
+            throw new Error('Falha na verificação do MAC - formato alternativo');
+        }
+        
+        // Extrai o IV (primeiros 16 bytes)
+        const iv = encryptedFile.slice(0, 16);
+        const encrypted = encryptedFile.slice(16);
+        
+        // Descriptografa o arquivo
+        const decipher = crypto.createDecipheriv(this.algorithms[mediaType], keys.cipherKey, iv);
+        decipher.setAutoPadding(true);
+        
+        let decrypted = decipher.update(encrypted);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted;
+    }
+
+    /**
      * Deriva as chaves de criptografia e MAC usando HKDF
-     * @param {Buffer} keyBuffer - Chave principal
-     * @param {string} mediaType - Tipo de mídia
-     * @returns {Object} - Objeto com as chaves derivadas
      */
     deriveKeys(keyBuffer, mediaType) {
         const info = this.getInfoForMediaType(mediaType);
+        
+        if (this.debug) {
+            console.log(`   🔍 Info cipher: ${info.cipher.toString()}`);
+            console.log(`   🔍 Info MAC: ${info.mac.toString()}`);
+        }
         
         // Deriva a chave de criptografia (32 bytes)
         const cipherKey = this.hkdfExpand(keyBuffer, info.cipher, 32);
@@ -72,10 +195,6 @@ class WhatsAppDecrypter {
 
     /**
      * Implementação do HKDF Expand
-     * @param {Buffer} prk - Chave pseudoaleatória
-     * @param {Buffer} info - Informação de contexto
-     * @param {number} length - Tamanho da chave desejada
-     * @returns {Buffer} - Chave derivada
      */
     hkdfExpand(prk, info, length) {
         const hashLen = 32; // SHA-256
@@ -97,8 +216,6 @@ class WhatsAppDecrypter {
 
     /**
      * Obtém as informações de contexto para cada tipo de mídia
-     * @param {string} mediaType - Tipo de mídia
-     * @returns {Object} - Informações de contexto
      */
     getInfoForMediaType(mediaType) {
         const contexts = {
@@ -125,26 +242,22 @@ class WhatsAppDecrypter {
 
     /**
      * Verifica a integridade do arquivo usando HMAC
-     * @param {Buffer} data - Dados do arquivo
-     * @param {Buffer} receivedMac - MAC recebido
-     * @param {Buffer} macKey - Chave MAC
-     * @returns {boolean} - True se o MAC é válido
      */
     verifyMac(data, receivedMac, macKey) {
         const hmac = crypto.createHmac('sha256', macKey);
         hmac.update(data);
         const calculatedMac = hmac.digest().slice(0, 10);
         
+        if (this.debug) {
+            console.log(`   🔍 MAC recebido: ${receivedMac.toString('hex')}`);
+            console.log(`   🔍 MAC calculado: ${calculatedMac.toString('hex')}`);
+        }
+        
         return crypto.timingSafeEqual(receivedMac, calculatedMac);
     }
 
     /**
      * Descriptografa um arquivo do sistema de arquivos
-     * @param {string} inputPath - Caminho do arquivo criptografado
-     * @param {string} mediaKey - Chave de mídia em base64
-     * @param {string} outputPath - Caminho de saída
-     * @param {string} mediaType - Tipo de mídia
-     * @returns {Promise<string>} - Caminho do arquivo descriptografado
      */
     async decryptFile(inputPath, mediaKey, outputPath, mediaType = 'document') {
         try {
@@ -168,10 +281,6 @@ class WhatsAppDecrypter {
 
     /**
      * Descriptografa dados em buffer e retorna o resultado
-     * @param {Buffer} encryptedBuffer - Buffer com dados criptografados
-     * @param {string} mediaKey - Chave de mídia em base64
-     * @param {string} mediaType - Tipo de mídia
-     * @returns {Buffer} - Buffer com dados descriptografados
      */
     decryptBuffer(encryptedBuffer, mediaKey, mediaType = 'document') {
         return this.decryptMedia(encryptedBuffer, mediaKey, mediaType);
@@ -179,13 +288,11 @@ class WhatsAppDecrypter {
 
     /**
      * Detecta o tipo de arquivo pelos magic bytes
-     * @param {Buffer} buffer - Buffer do arquivo
-     * @returns {string} - Extensão do arquivo detectada
      */
     detectFileType(buffer) {
         const signatures = {
             'ffd8ff': 'jpg',
-            '89504e47': 'png',
+            '89504e47': 'png', 
             '47494638': 'gif',
             '25504446': 'pdf',
             '504b0304': 'zip',
@@ -202,13 +309,42 @@ class WhatsAppDecrypter {
 
         const hex = buffer.toString('hex', 0, 8).toLowerCase();
         
+        if (this.debug) {
+            console.log(`   🔍 Magic bytes: ${hex}`);
+        }
+        
         for (const [signature, extension] of Object.entries(signatures)) {
             if (hex.startsWith(signature)) {
+                if (this.debug) {
+                    console.log(`   📁 Tipo detectado: ${extension}`);
+                }
                 return extension;
             }
         }
         
-        return 'bin'; // Formato desconhecido
+        if (this.debug) {
+            console.log(`   📁 Tipo desconhecido, usando: bin`);
+        }
+        return 'bin';
+    }
+
+    /**
+     * Função auxiliar para debug de dados
+     */
+    debugData(data, label) {
+        if (this.debug && data) {
+            console.log(`   🔍 ${label}:`);
+            console.log(`      Tamanho: ${data.length} bytes`);
+            console.log(`      Primeiros 16 bytes: ${data.slice(0, 16).toString('hex')}`);
+            console.log(`      Últimos 16 bytes: ${data.slice(-16).toString('hex')}`);
+        }
+    }
+
+    /**
+     * Ativar/desativar debug
+     */
+    setDebug(enabled) {
+        this.debug = enabled;
     }
 }
 
