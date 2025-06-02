@@ -58,7 +58,7 @@ class N8NWhatsAppDecrypter {
                 originalSize: documentMessage.fileLength,
                 decryptedSize: decryptedBuffer.length,
                 mimetype: documentMessage.mimetype,
-                filePath: `./${outputFileName}`,
+                filePath: outputFileName,
                 buffer: decryptedBuffer
             };
             
