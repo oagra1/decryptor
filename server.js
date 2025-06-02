@@ -251,6 +251,54 @@ app.post('/decrypt/file', async (req, res) => {
     }
 });
 
+// Rota específica para N8N - Processa webhook do WhatsApp
+app.post('/n8n/decrypt', async (req, res) => {
+    try {
+        console.log('🎯 Recebendo dados do N8N');
+        console.log('📦 Dados recebidos:', JSON.stringify(req.body, null, 2));
+        
+        const N8NProcessor = require('./n8n_decrypt').N8NWhatsAppDecrypter;
+        const processor = new N8NProcessor();
+        
+        // Processar dados do webhook
+        const result = await processor.processForN8N(req.body);
+        
+        console.log('✅ Processamento concluído');
+        res.json(result);
+        
+    } catch (error) {
+        console.error('❌ Erro no processamento N8N:', error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.stack
+        });
+    }
+});
+
+// Rota de teste para seus dados específicos
+app.post('/test/your-data', async (req, res) => {
+    try {
+        console.log('🧪 Testando com seus dados específicos');
+        
+        const { testarComSeusDados } = require('./n8n_decrypt');
+        const result = await testarComSeusDados();
+        
+        res.json({
+            success: true,
+            message: 'Teste concluído com sucesso',
+            result: result
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro no teste:', error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 // Middleware de tratamento de erros
 app.use((error, req, res, next) => {
     console.error('❌ Erro interno:', error);
