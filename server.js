@@ -28,12 +28,17 @@ app.post('/decrypt', upload.single('file'), async (req, res) => {
     const decrypted = decryptMedia(encryptedData, req.body.mediaKey, 'document');
 
     // Define nome do arquivo de saída
-    const fileName = req.file.originalname
-      ? req.file.originalname.replace('.enc', '')
-      : 'decrypted.pdf';
+    const originalName = req.file.originalname || 'decrypted.pdf';
+    const fileName = originalName.endsWith('.enc') ? originalName.slice(0, -4) : `decrypted-${originalName}`;
+
+    // Detecta o tipo de arquivo para o header correto
+    let contentType = 'application/pdf';
+    if (fileName.endsWith('.docx')) {
+      contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
 
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Type', contentType);
     res.send(decrypted);
   } catch (e) {
     res.status(500).json({ error: e.message });
