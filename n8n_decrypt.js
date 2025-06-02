@@ -83,14 +83,28 @@ class N8NWhatsAppDecrypter {
             console.log('🔄 Processando dados binários do N8N');
             
             // Pegar dados do JSON
-            const jsonData = n8nData.json;
-            const mediaKey = jsonData.mediaKey || 'SUA_MEDIA_KEY_AQUI';
+            const jsonData = n8nData.json || n8nData;
+            const mediaKey = jsonData.mediaKey;
             const fileName = jsonData.fileName || 'document.pdf';
             const mimetype = jsonData.mimetype || 'application/pdf';
             
-            // Pegar arquivo binário
-            const binaryData = n8nData.binary.data;
-            const encryptedBuffer = Buffer.from(binaryData.data, binaryData.encoding || 'base64');
+            if (!mediaKey) {
+                throw new Error('MediaKey não encontrada nos dados');
+            }
+            
+            let encryptedBuffer;
+            
+            // Tentar diferentes formas de acessar os dados binários
+            if (jsonData.fileData) {
+                // Dados vêm como base64 no JSON
+                encryptedBuffer = Buffer.from(jsonData.fileData, 'base64');
+            } else if (n8nData.binary && n8nData.binary.data) {
+                // Dados vêm como binary
+                const binaryData = n8nData.binary.data;
+                encryptedBuffer = Buffer.from(binaryData.data, binaryData.encoding || 'base64');
+            } else {
+                throw new Error('Dados do arquivo não encontrados');
+            }
             
             console.log(`📋 Dados do N8N:
    📄 Arquivo: ${fileName}
