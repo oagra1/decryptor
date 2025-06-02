@@ -257,8 +257,8 @@ app.post('/n8n/decrypt', async (req, res) => {
         console.log('🎯 Recebendo dados do N8N');
         console.log('📦 Dados recebidos:', JSON.stringify(req.body, null, 2));
         
-        const N8NProcessor = require('./n8n_decrypt').N8NWhatsAppDecrypter;
-        const processor = new N8NProcessor();
+        const { N8NWhatsAppDecrypter } = require('./n8n_decrypt');
+        const processor = new N8NWhatsAppDecrypter();
         
         // Processar dados do webhook
         const result = await processor.processForN8N(req.body);
@@ -276,25 +276,80 @@ app.post('/n8n/decrypt', async (req, res) => {
     }
 });
 
-// Rota de teste para seus dados específicos
-app.post('/test/your-data', async (req, res) => {
+// Rota de debug completo
+app.post('/debug/analyze', upload.single('file'), async (req, res) => {
     try {
-        console.log('🧪 Testando com seus dados específicos');
+        const { mediaKey } = req.body;
         
-        const { testarComSeusDados } = require('./n8n_decrypt');
-        const result = await testarComSeusDados();
+        if (!req.file || !mediaKey) {
+            return res.status(400).json({
+                error: 'Arquivo e mediaKey são obrigatórios'
+            });
+        }
         
-        res.json({
-            success: true,
-            message: 'Teste concluído com sucesso',
-            result: result
-        });
+        const fileBuffer = req.file.buffer;
+        
+        console.log('🔍 ANÁLISE COMPLETA DO ARQUIVO');
+        console.log('═'.repeat(50));
+        
+        // Análise do arquivo
+        const analysis = {
+            file: {
+                name: req.file.originalname,
+                size: fileBuffer.length,
+                firstBytes: fileBuffer.slice(0, 32).toString('hex'),
+                lastBytes: fileBuffer.slice(-32).toString('hex'),
+                first16: fileBuffer.slice(0, 16).toString('hex'),
+                last10: fileBuffer.slice(-10).toString('hex')
+            },
+            mediaKey: {
+                value: mediaKey,
+                length: mediaKey.length,
+                isBase64: /^[A-Za-z0-9+/=]+$/.test(mediaKey)
+            }
+        };
+        
+        // Tentar diferentes abordagens
+        const results = [];
+        const types = ['document', 'image', 'video', 'audio'];
+        
+        for (const type of types) {
+            try {
+                const result = decrypter.decryptBuffer(fileBuffer, mediaKey, type);
+                results.push({
+                    type: type,
+                    success: true,
+                    size: result.length,
+                    magicBytes: result.slice(0, 16).toString('hex')
+                });
+                
+                // Salvar o primeiro que funcionar
+                if (results.length === 1) {
+                    const outputFile = `debug_success_${Date.now()}.bin`;
+                    fs.writeFileSync(outputFile, result);
+                    analysis.successFile = outputFile;
+                }
+                
+            } catch (error) {
+                results.push({
+                    type: type,
+                    success: false,
+                    error: error.message
+                });
+            }
+        }
+        
+        analysis.attempts = results;
+        analysis.anySuccess = results.some(r => r.success);
+        
+        console.log('📊 Resultado da análise:', JSON.stringify(analysis, null, 2));
+        
+        res.json(analysis);
         
     } catch (error) {
-        console.error('❌ Erro no teste:', error.message);
         res.status(500).json({
-            success: false,
-            error: error.message
+            error: error.message,
+            stack: error.stack
         });
     }
 });
