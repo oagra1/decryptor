@@ -1,485 +1,172 @@
 const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const WhatsAppDecrypter = require('./decrypt');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const winston = require('winston');
+const dotenv = require('dotenv');
+const decryptionService = require('./services/decryptionService');
+const healthCheck = require('./routes/healthCheck');
 
+// Load environment variables
+dotenv.config();
+
+// Configure logger
+const logger = winston.createLogger({
+    level: process.env.LOG_LEVEL || 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.errors({ stack: true }),
+        winston.format.json()
+    ),
+    transports: [
+        new winston.transports.Console({
+            format: winston.format.combine(
+                winston.format.colorize(),
+                winston.format.simple()
+            )
+        }),
+        new winston.transports.File({ 
+            filename: 'logs/error.log', 
+            level: 'error' 
+        }),
+        new winston.transports.File({ 
+            filename: 'logs/combined.log' 
+        })
+    ]
+});
+
+// Create Express app
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// Configuração do multer para upload de arquivos
-const storage = multer.memoryStorage();
-const upload = multer({ 
-    storage: storage,
-    limits: {
-        fileSize: 100 * 1024 * 1024 // 100MB max
-    }
+// Security middleware
+app.use(helmet());
+
+// CORS configuration
+app.use(cors({
+    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+    methods: ['POST', 'GET'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again later.'
 });
+app.use('/api/', limiter);
 
-// Middleware
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+// Body parser middleware - increase limit for large files
+app.use(bodyParser.json({ limit: '100mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '100mb' }));
 
-// Instância do decrypter
-const decrypter = new WhatsAppDecrypter();
-
-// Rota principal
-app.get('/', (req, res) => {
-    res.json({
-        message: 'WhatsApp Media Decrypter API',
-        version: '1.0.0',
-        endpoints: {
-            'POST /decrypt': 'Descriptografa um arquivo do WhatsApp',
-            'POST /decrypt/buffer': 'Descriptografa dados em buffer',
-            'GET /health': 'Verifica o status da API'
-        }
+// Request logging middleware
+app.use((req, res, next) => {
+    logger.info({
+        method: req.method,
+        url: req.url,
+        ip: req.ip,
+        timestamp: new Date().toISOString()
     });
+    next();
 });
 
-// Rota de saúde
-app.get('/health', (req, res) => {
-    res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
+// Routes
+app.use('/health', healthCheck);
 
-// Rota para descriptografar arquivo via upload
-app.post('/decrypt', upload.single('file'), async (req, res) => {
+// Main decryption endpoint
+app.post('/api/decrypt', async (req, res) => {
+    const startTime = Date.now();
+    
     try {
-        console.log('📥 Recebendo requisição /decrypt');
-        console.log('📋 Headers:', JSON.stringify(req.headers, null, 2));
-        console.log('📦 Body:', JSON.stringify(req.body, null, 2));
-        console.log('📁 File info:', req.file ? {
-            fieldname: req.file.fieldname,
-            originalname: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size
-        } : 'Nenhum arquivo');
-        
-        const { mediaKey, mediaType = 'document', outputName } = req.body;
-        
-        if (!req.file) {
+        const { 
+            fileData, 
+            mediaKey, 
+            fileEncSha256, 
+            mimetype, 
+            fileName 
+        } = req.body;
+
+        // Validate required fields
+        if (!fileData || !mediaKey || !fileEncSha256) {
+            logger.warn('Missing required fields in request');
             return res.status(400).json({
-                error: 'Nenhum arquivo foi enviado',
-                debug: {
-                    hasFile: !!req.file,
-                    body: req.body,
-                    files: req.files
-                }
-            });
-        }
-        
-        if (!mediaKey) {
-            return res.status(400).json({
-                error: 'mediaKey é obrigatória',
-                debug: {
-                    mediaKey: {
-                        presente: !!mediaKey,
-                        tipo: typeof mediaKey,
-                        valor: mediaKey
-                    },
-                    bodyCompleto: req.body
-                }
+                success: false,
+                error: 'Missing required fields: fileData, mediaKey, and fileEncSha256 are required'
             });
         }
 
-        console.log(`📥 Arquivo recebido: ${req.file.originalname} (${req.file.size} bytes)`);
-        console.log(`🔑 MediaKey: ${mediaKey.substring(0, 20)}...`);
-        console.log(`📄 Tipo de mídia: ${mediaType}`);
+        logger.info(`Starting decryption for file: ${fileName || 'unnamed'}`);
 
-        // Ativar debug no decrypter
-        decrypter.setDebug(true);
-        
-        // Debug do buffer recebido
-        console.log('🔍 Debug do arquivo:');
-        console.log(`   Tamanho: ${req.file.buffer.length} bytes`);
-        console.log(`   Primeiros 32 bytes: ${req.file.buffer.slice(0, 32).toString('hex')}`);
-        console.log(`   Últimos 32 bytes: ${req.file.buffer.slice(-32).toString('hex')}`);
-
-        // Descriptografa o arquivo
-        const decryptedBuffer = decrypter.decryptBuffer(req.file.buffer, mediaKey, mediaType);
-        
-        // Detecta o tipo do arquivo
-        const detectedType = decrypter.detectFileType(decryptedBuffer);
-        
-        // Define o nome do arquivo de saída
-        const fileName = outputName || `decrypted_${Date.now()}.${detectedType}`;
-        
-        console.log(`✅ Arquivo descriptografado com sucesso`);
-        console.log(`📁 Tipo detectado: ${detectedType}`);
-        console.log(`💾 Tamanho final: ${decryptedBuffer.length} bytes`);
-
-        // Retorna o arquivo descriptografado
-        res.set({
-            'Content-Type': 'application/octet-stream',
-            'Content-Disposition': `attachment; filename="${fileName}"`,
-            'Content-Length': decryptedBuffer.length
-        });
-        
-        res.send(decryptedBuffer);
-
-    } catch (error) {
-        console.error('❌ Erro na descriptografia:', error.message);
-        res.status(500).json({
-            error: 'Erro na descriptografia',
-            details: error.message
-        });
-    }
-});
-
-// Rota para descriptografar dados em base64
-app.post('/decrypt/buffer', async (req, res) => {
-    try {
-        console.log('📥 Recebendo requisição /decrypt/buffer');
-        console.log('📋 Headers:', JSON.stringify(req.headers, null, 2));
-        console.log('📦 Body keys:', Object.keys(req.body));
-        console.log('📦 Body:', JSON.stringify(req.body, null, 2));
-        
-        const { encryptedData, mediaKey, mediaType = 'document', returnBase64 = false } = req.body;
-        
-        // Debug mais detalhado
-        console.log('🔍 Validação dos dados:');
-        console.log(`   encryptedData presente: ${!!encryptedData}`);
-        console.log(`   encryptedData tipo: ${typeof encryptedData}`);
-        console.log(`   encryptedData tamanho: ${encryptedData ? encryptedData.length : 'N/A'}`);
-        console.log(`   mediaKey presente: ${!!mediaKey}`);
-        console.log(`   mediaKey tipo: ${typeof mediaKey}`);
-        console.log(`   mediaKey tamanho: ${mediaKey ? mediaKey.length : 'N/A'}`);
-        
-        if (!encryptedData || !mediaKey) {
-            const errorDetail = {
-                encryptedData: {
-                    presente: !!encryptedData,
-                    tipo: typeof encryptedData,
-                    tamanho: encryptedData ? encryptedData.length : null
-                },
-                mediaKey: {
-                    presente: !!mediaKey,
-                    tipo: typeof mediaKey,
-                    tamanho: mediaKey ? mediaKey.length : null
-                },
-                bodyCompleto: req.body
-            };
-            
-            return res.status(400).json({
-                error: 'encryptedData e mediaKey são obrigatórios',
-                debug: errorDetail
-            });
-        }
-
-        console.log(`📥 Descriptografando buffer (${encryptedData.length} chars base64)`);
-        console.log(`🔑 MediaKey: ${mediaKey.substring(0, 20)}...`);
-
-        // Converte de base64 para buffer
-        const encryptedBuffer = Buffer.from(encryptedData, 'base64');
-        
-        // Descriptografa
-        const decryptedBuffer = decrypter.decryptBuffer(encryptedBuffer, mediaKey, mediaType);
-        
-        // Detecta o tipo do arquivo
-        const detectedType = decrypter.detectFileType(decryptedBuffer);
-        
-        console.log(`✅ Buffer descriptografado com sucesso`);
-        console.log(`📁 Tipo detectado: ${detectedType}`);
-        console.log(`💾 Tamanho final: ${decryptedBuffer.length} bytes`);
-
-        const response = {
-            success: true,
-            detectedFileType: detectedType,
-            size: decryptedBuffer.length,
-            data: returnBase64 ? decryptedBuffer.toString('base64') : decryptedBuffer
-        };
-
-        if (returnBase64) {
-            res.json(response);
-        } else {
-            // Retorna o arquivo binário
-            res.set({
-                'Content-Type': 'application/octet-stream',
-                'X-Detected-Type': detectedType,
-                'X-File-Size': decryptedBuffer.length
-            });
-            res.send(decryptedBuffer);
-        }
-
-    } catch (error) {
-        console.error('❌ Erro na descriptografia:', error.message);
-        res.status(500).json({
-            error: 'Erro na descriptografia',
-            details: error.message
-        });
-    }
-});
-
-// Rota para testar a descriptografia com arquivo local
-app.post('/decrypt/file', async (req, res) => {
-    try {
-        const { inputPath, mediaKey, mediaType = 'document', outputPath } = req.body;
-        
-        if (!inputPath || !mediaKey) {
-            return res.status(400).json({
-                error: 'inputPath e mediaKey são obrigatórios'
-            });
-        }
-
-        if (!fs.existsSync(inputPath)) {
-            return res.status(404).json({
-                error: 'Arquivo não encontrado',
-                path: inputPath
-            });
-        }
-
-        const finalOutputPath = outputPath || `decrypted_${Date.now()}.bin`;
-        
-        console.log(`📥 Descriptografando arquivo: ${inputPath}`);
-        console.log(`🔑 MediaKey: ${mediaKey.substring(0, 20)}...`);
-        console.log(`💾 Saída: ${finalOutputPath}`);
-
-        const result = await decrypter.decryptFile(inputPath, mediaKey, finalOutputPath, mediaType);
-        
-        res.json({
-            success: true,
-            inputPath: inputPath,
-            outputPath: result,
-            message: 'Arquivo descriptografado com sucesso'
-        });
-
-    } catch (error) {
-        console.error('❌ Erro na descriptografia:', error.message);
-        res.status(500).json({
-            error: 'Erro na descriptografia',
-            details: error.message
-        });
-    }
-});
-
-// ENDPOINT DE TESTE DEFINITIVO
-app.post('/test/brute-force', async (req, res) => {
-    try {
-        console.log('🔥 TESTE FORÇA BRUTA');
-        
-        const { mediaKey, fileData } = req.body;
-        
-        if (!mediaKey || !fileData) {
-            return res.status(400).json({
-                error: 'Preciso de mediaKey e fileData'
-            });
-        }
-        
-        const encryptedBuffer = Buffer.from(fileData, 'base64');
-        console.log(`📦 Buffer: ${encryptedBuffer.length} bytes`);
-        console.log(`🔑 MediaKey: ${mediaKey}`);
-        
-        const results = [];
-        const types = ['document', 'image', 'video', 'audio'];
-        
-        // Testar cada tipo de mídia
-        for (const type of types) {
-            try {
-                console.log(`🧪 Testando tipo: ${type}`);
-                decrypter.setDebug(false); // Desligar debug para não poluir
-                const result = decrypter.decryptBuffer(encryptedBuffer, mediaKey, type);
-                
-                const magicBytes = result.slice(0, 16).toString('hex');
-                const detectedType = decrypter.detectFileType(result);
-                
-                // Salvar o sucesso
-                const fileName = `success_${type}_${Date.now()}.${detectedType}`;
-                fs.writeFileSync(fileName, result);
-                
-                results.push({
-                    mediaType: type,
-                    success: true,
-                    size: result.length,
-                    magicBytes: magicBytes,
-                    detectedType: detectedType,
-                    fileName: fileName
-                });
-                
-                console.log(`✅ SUCESSO com ${type}! Arquivo: ${fileName}`);
-                
-            } catch (error) {
-                results.push({
-                    mediaType: type,
-                    success: false,
-                    error: error.message
-                });
-                console.log(`❌ Falhou com ${type}: ${error.message}`);
-            }
-        }
-        
-        // Tentar com variações da MediaKey
-        const keyVariations = [
+        // Decrypt the file
+        const result = await decryptionService.decryptWhatsAppMedia({
+            fileData,
             mediaKey,
-            mediaKey.replace(/\+/g, '-').replace(/\//g, '_'), // URL safe
-            mediaKey.replace(/=+$/, ''), // Sem padding
-            mediaKey + '=', // Com padding extra
-        ];
-        
-        for (const key of keyVariations) {
-            if (key === mediaKey) continue; // Já testou
-            
-            try {
-                console.log(`🔑 Testando variação da chave: ${key.substring(0, 20)}...`);
-                const result = decrypter.decryptBuffer(encryptedBuffer, key, 'document');
-                
-                const fileName = `key_variation_${Date.now()}.pdf`;
-                fs.writeFileSync(fileName, result);
-                
-                results.push({
-                    mediaType: 'document',
-                    keyVariation: key,
-                    success: true,
-                    size: result.length,
-                    fileName: fileName
-                });
-                
-                console.log(`✅ SUCESSO com variação da chave! Arquivo: ${fileName}`);
-                
-            } catch (error) {
-                // Ignorar erros de variação
-            }
-        }
-        
-        const anySuccess = results.some(r => r.success);
-        
-        res.json({
-            success: anySuccess,
-            message: anySuccess ? 'Pelo menos uma tentativa funcionou!' : 'Nenhuma tentativa funcionou',
-            totalTests: results.length,
-            results: results,
-            analysis: {
-                bufferSize: encryptedBuffer.length,
-                mediaKeyLength: mediaKey.length,
-                firstBytes: encryptedBuffer.slice(0, 32).toString('hex'),
-                lastBytes: encryptedBuffer.slice(-32).toString('hex')
-            }
+            fileEncSha256,
+            mimetype,
+            fileName
         });
-        
-    } catch (error) {
-        res.status(500).json({
-            error: error.message,
-            stack: error.stack
-        });
-    }
-});
 
-// Rota SUPER SIMPLES - JSON com mediaKey e fileData
-app.post('/simple/json', async (req, res) => {
-    try {
-        const { mediaKey, fileData } = req.body;
+        const processingTime = Date.now() - startTime;
         
-        console.log('🎯 ROTA JSON SIMPLES');
-        console.log(`🔑 MediaKey: ${mediaKey ? 'OK' : 'FALTOU'}`);
-        console.log(`📦 FileData: ${fileData ? 'OK' : 'FALTOU'}`);
-        
-        if (!mediaKey || !fileData) {
-            return res.status(400).json({
-                error: 'Preciso de mediaKey e fileData'
-            });
-        }
-        
-        // Converter e descriptografar
-        const encryptedBuffer = Buffer.from(fileData, 'base64');
-        decrypter.setDebug(true);
-        const decryptedBuffer = decrypter.decryptBuffer(encryptedBuffer, mediaKey, 'document');
-        
-        console.log(`✅ FUNCIONOU: ${decryptedBuffer.length} bytes`);
-        
-        // Retornar JSON com arquivo
+        logger.info(`Decryption successful for ${fileName || 'unnamed'} in ${processingTime}ms`);
+
+        // Return decrypted file
         res.json({
             success: true,
-            size: decryptedBuffer.length,
-            fileBase64: decryptedBuffer.toString('base64')
+            data: {
+                decryptedFile: result.decryptedData,
+                mimetype: result.mimetype,
+                fileName: result.fileName,
+                fileSize: result.fileSize,
+                sha256: result.sha256,
+                processingTime: processingTime
+            }
         });
-        
-    } catch (error) {
-        console.error('❌ ERRO JSON:', error.message);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
 
-// Rota SIMPLES E DIRETA - FAZ O QUE VOCÊ QUER
-app.post('/simple/decrypt', upload.single('file'), async (req, res) => {
-    try {
-        const { mediaKey } = req.body;
-        
-        console.log('🎯 ROTA SIMPLES');
-        console.log(`📁 Arquivo: ${req.file ? 'OK' : 'FALTOU'}`);
-        console.log(`🔑 MediaKey: ${mediaKey ? 'OK' : 'FALTOU'}`);
-        
-        if (!req.file || !mediaKey) {
-            return res.status(400).json({
-                error: 'Preciso do arquivo e mediaKey'
-            });
-        }
-        
-        // Descriptografar DIRETO
-        decrypter.setDebug(true);
-        const decryptedBuffer = decrypter.decryptBuffer(req.file.buffer, mediaKey, 'document');
-        
-        console.log(`✅ FUNCIONOU: ${decryptedBuffer.length} bytes`);
-        
-        // Retornar arquivo direto
-        res.set({
-            'Content-Type': 'application/pdf',
-            'Content-Disposition': 'attachment; filename="decrypted.pdf"'
-        });
-        
-        res.send(decryptedBuffer);
-        
     } catch (error) {
-        console.error('❌ ERRO SIMPLES:', error.message);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
-
-// Rota específica para N8N - Processa webhook do WhatsApp
-app.post('/n8n/decrypt', async (req, res) => {
-    try {
-        console.log('🎯 Recebendo dados do N8N');
-        console.log('📦 Dados recebidos:', JSON.stringify(req.body, null, 2));
+        const processingTime = Date.now() - startTime;
         
-        const { N8NWhatsAppDecrypter } = require('./n8n_decrypt');
-        const processor = new N8NWhatsAppDecrypter();
-        
-        // Processar dados do webhook
-        const result = await processor.processForN8N(req.body);
-        
-        console.log('✅ Processamento concluído');
-        res.json(result);
-        
-    } catch (error) {
-        console.error('❌ Erro no processamento N8N:', error.message);
-        res.status(500).json({
-            success: false,
+        logger.error('Decryption error:', {
             error: error.message,
-            details: error.stack
+            stack: error.stack,
+            processingTime
+        });
+
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Internal server error',
+            processingTime: processingTime
         });
     }
 });
 
-// Middleware de tratamento de erros
-app.use((error, req, res, next) => {
-    console.error('❌ Erro interno:', error);
-    res.status(500).json({
-        error: 'Erro interno do servidor',
-        details: error.message
+// 404 handler
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        error: 'Endpoint not found'
     });
 });
 
-// Inicia o servidor
-app.listen(port, () => {
-    console.log(`🚀 WhatsApp Decrypter API rodando na porta ${port}`);
-    console.log(`📡 Endpoints disponíveis:`);
-    console.log(`   GET  http://localhost:${port}/`);
-    console.log(`   POST http://localhost:${port}/decrypt`);
-    console.log(`   POST http://localhost:${port}/decrypt/buffer`);
-    console.log(`   POST http://localhost:${port}/decrypt/file`);
-    console.log(`   GET  http://localhost:${port}/health`);
+// Global error handler
+app.use((err, req, res, next) => {
+    logger.error('Unhandled error:', {
+        error: err.message,
+        stack: err.stack
+    });
+
+    res.status(500).json({
+        success: false,
+        error: 'Internal server error'
+    });
 });
 
-module.exports = app;
+// Start server
+app.listen(PORT, () => {
+    logger.info(`WhatsApp Decryption Service running on port ${PORT}`);
+    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`Max file size: 100MB`);
+});
