@@ -1,39 +1,36 @@
+// decrypt.js
 const crypto = require('crypto');
+const fs = require('fs');
 
-function hkdf(key, length, appInfo = "") {
-  let keyBlock = Buffer.alloc(0);
-  let outputBlock = Buffer.alloc(0);
-  let blockIndex = 1;
-  while (outputBlock.length < length) {
-    let input = Buffer.concat([
-      keyBlock,
-      Buffer.from(appInfo, "utf-8"),
-      Buffer.from([blockIndex])
-    ]);
-    keyBlock = crypto.createHmac("sha256", key).update(input).digest();
-    outputBlock = Buffer.concat([outputBlock, keyBlock]);
-    blockIndex += 1;
-  }
-  return outputBlock.slice(0, length);
-}
+const decryptFile = async (encryptedPath, mediaKey, outputPath) => {
+    try {
+        const derivedKey = crypto.hkdfSync(
+            'sha256',
+            Buffer.from(mediaKey, 'base64'),
+            '',
+            'WhatsApp Media Key',
+            112
+        );
 
-function decryptMedia(buffer, mediaKeyBase64, mediaType) {
-  const mediaKey = Buffer.from(mediaKeyBase64, 'base64');
-  const info = {
-    'document': 'WhatsApp Document Keys'
-  };
-  const expandedKey = hkdf(mediaKey, 112, info[mediaType]);
-  const iv = expandedKey.slice(0, 16);
-  const cipherKey = expandedKey.slice(16, 48);
+        const macKey = derivedKey.slice(0, 32);
+        const cipherKey = derivedKey.slice(32, 64);
+        const iv = derivedKey.slice(64, 80);
 
-  // Remove os últimos 10 bytes (MAC)
-  const file = buffer.slice(0, buffer.length - 10);
+        const encryptedData = await fs.promises.readFile(encryptedPath);
+        const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
+        
+        const decryptedBuffer = Buffer.concat([
+            decipher.update(encryptedData),
+            decipher.final()
+        ]);
 
-  const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
-  decipher.setAutoPadding(true);
+        await fs.promises.writeFile(outputPath, decryptedBuffer);
+        return { status: 'success', path: outputPath };
 
-  let decrypted = Buffer.concat([decipher.update(file), decipher.final()]);
-  return decrypted;
-}
+    } catch (error) {
+        console.error('Erro na descriptografia:', error);
+        return { status: 'error', details: error.message };
+    }
+};
 
-module.exports = { decryptMedia };
+module.exports = { decryptFile };
