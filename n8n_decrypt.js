@@ -10,8 +10,6 @@ class N8NWhatsAppDecrypter {
 
     /**
      * Processa dados recebidos do webhook N8N do WhatsApp
-     * @param {Object} webhookData - Dados completos do webhook
-     * @returns {Object} - Resultado com arquivo descriptografado
      */
     async processWhatsAppDocument(webhookData) {
         try {
@@ -70,8 +68,6 @@ class N8NWhatsAppDecrypter {
 
     /**
      * Extrai dados do documento do webhook do WhatsApp
-     * @param {Object} data - Dados do webhook
-     * @returns {Object} - Dados do documento extraídos
      */
     extractDocumentData(data) {
         try {
@@ -118,8 +114,6 @@ class N8NWhatsAppDecrypter {
 
     /**
      * Baixa o arquivo criptografado do WhatsApp
-     * @param {string} url - URL do arquivo
-     * @returns {Buffer} - Buffer do arquivo criptografado
      */
     async downloadFile(url) {
         try {
@@ -145,10 +139,6 @@ class N8NWhatsAppDecrypter {
 
     /**
      * Descriptografa o arquivo usando a mediaKey
-     * @param {Buffer} encryptedBuffer - Buffer criptografado
-     * @param {string} mediaKey - Chave de mídia em base64
-     * @param {string} mimetype - Tipo MIME do arquivo
-     * @returns {Buffer} - Buffer descriptografado
      */
     async decryptFile(encryptedBuffer, mediaKey, mimetype) {
         try {
@@ -182,55 +172,7 @@ class N8NWhatsAppDecrypter {
     }
 
     /**
-     * Função específica para seus dados do N8N
-     * Usar com os dados exatos que você mostrou nas imagens
-     */
-    async processYourN8NData() {
-        console.log('🎯 Processando SEUS dados específicos do N8N');
-        console.log('═'.repeat(60));
-        
-        // Dados extraídos das suas imagens
-        const yourData = {
-            message: {
-                documentMessage: {
-                    url: "https://mmg.whatsapp.net/v/t62.7119-24/139703300_1359605348804309_2170912817383324698_n.enc?ccb=11-4&oh=01_Q5AaigFOU-g0q_zHrf7nc4zfrjak1VKiYVvrQjutOiqjnWqXoe=686542f-3k_nc_sid=5e03e0&_nc_hot=1748884740",
-                    mimetype: "application/pdf",
-                    title: "Script para reunião de vendas-20250513160001816",
-                    fileSha256: "UKCacTl6GW+TgyBymL7GSS9YgSJnyImsLtXI0blNGM=",
-                    fileLength: 375354,
-                    pageCount: 12,
-                    mediaKey: "No+4U0PSQpa/oLRIlbLFw26XR2770B4w3KH+EYMcyA=",
-                    fileName: "Script para reunião de vendas-20250513160001816.pdf",
-                    fileEncSha256: "j96rwwZ52ZznHutdNGvdekviI8PPo6QCMagnkvNZOXg0=",
-                    directPath: "/v/t62.7119-24/139703300_1359605348804309_2170912817383324698_n.enc?ccb=11-4&oh=01_Q5AaigFOU-g0q_zHrf7nc4zfrjak1VKiYVvrQjutOiqjnWqXoe=686542f-3k_nc_sid=5e03e0&_nc_hot=1748884740"
-                }
-            }
-        };
-        
-        try {
-            const result = await this.processWhatsAppDocument(yourData);
-            
-            console.log('\n🎉 RESULTADO FINAL:');
-            console.log('═'.repeat(40));
-            console.log(`✅ Arquivo original: ${result.originalFileName}`);
-            console.log(`✅ Arquivo descriptografado: ${result.decryptedFileName}`);
-            console.log(`✅ Tamanho original: ${result.originalSize} bytes`);
-            console.log(`✅ Tamanho final: ${result.decryptedSize} bytes`);
-            console.log(`✅ Tipo: ${result.mimetype}`);
-            console.log(`✅ Caminho: ${result.filePath}`);
-            
-            return result;
-            
-        } catch (error) {
-            console.error('❌ Erro:', error.message);
-            throw error;
-        }
-    }
-
-    /**
      * Função para usar no N8N - Format simplificado
-     * @param {Object} n8nData - Dados recebidos do N8N
-     * @returns {Object} - Dados para próximo nó do N8N
      */
     async processForN8N(n8nData) {
         try {
@@ -269,23 +211,7 @@ async function decryptWhatsAppDocument(webhookData) {
     return await processor.processForN8N(webhookData);
 }
 
-// Teste com seus dados reais
-async function testarComSeusDados() {
-    const processor = new N8NWhatsAppDecrypter();
-    return await processor.processYourN8NData();
-}
-
 module.exports = {
     N8NWhatsAppDecrypter,
-    decryptWhatsAppDocument,
-    testarComSeusDados
+    decryptWhatsAppDocument
 };
-
-// Se executado diretamente, testar com seus dados
-if (require.main === module) {
-    testarComSeusDados()
-        .then(result => {
-            console.log('\n🎯 PRONTO PARA USAR NO N8N!');
-        })
-        .catch(console.error);
-}
